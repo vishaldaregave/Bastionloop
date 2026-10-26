@@ -1,0 +1,167 @@
+import { useState } from "react";
+import { api } from "../api";
+import { usePolling } from "../hooks";
+import { CanaryHeatmap } from "../components/CanaryHeatmap";
+import { IsolationMap } from "../components/IsolationMap";
+import {
+  Card,
+  ErrorBanner,
+  ModeSwitch,
+  SectionTitle,
+  Spinner,
+  StatusPill,
+} from "../components/UI";
+
+export function Isolation() {
+  const overview = usePolling(() => api.get<any>("/v1/dashboard/overview"), 3500);
+  const isolation = usePolling(() => api.get<any>("/v1/dashboard/isolation"), 3500);
+  const runs = usePolling(() => api.get<any>("/v1/runs"), 3500);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const mode = overview.data?.mode ?? "hardened";
+  const allRuns: any[] = runs.data?.runs ?? [];
+  const hardened = allRuns.find((run) => run.mode === "hardened" && run.status === "complete");
+  const naive = allRuns.find((run) => run.mode === "naive" && run.status === "complete");
+  const attempts = isolation.data?.recent_attempts ?? [];
+
+  async function changeMode(next: "hardened" | "naive") {
+    setBusy(true);
+    setNote(null);
+    try {
+      await api.post("/v1/demo/mode", { mode: next });
+      await Promise.all([overview.refresh(), isolation.refresh()]);
+      setNote(`Global mode: ${next}. Runs keep the mode they were created with.`);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runMode(runMode: "hardened" | "naive") {
+    setBusy(true);
+    setNote(`Running six attacks in ${runMode} mode...`);
+    try {
+      const run = await api.post<any>("/v1/runs", {
+        benchmark_id: "jailbreakbench-subset.v1",
+        mode: runMode,
+        max_cases: 6,
+        tenant_id: "red",
+      });
+      await api.post(`/v1/runs/${run.run_id}/start?sync=true`);
+      await Promise.all([overview.refresh(), isolation.refresh(), runs.refresh()]);
+      setNote(`${runMode} run ${run.run_id} complete.`);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runComparison() {
+    setBusy(true);
+    try {
+      setNote("Running the BastionLoop baseline...");
+      await runMode("hardened");
+      setNote("Running the deliberate naive baseline...");
+      await runMode("naive");
+      setNote("Both baselines complete. Compare the two heatmaps.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="page">
+      <SectionTitle hint="Isolation is not a claim on a slide. It is a set of executed boundary attempts, channel scans and a model freshness probe.">
+        Isolation map
+      </SectionTitle>
+
+      {(overview.error || isolation.error) && (
+        <ErrorBanner message={overview.error || isolation.error || ""} onRetry={() => { void overview.refresh(); void isolation.refresh(); }} />
+      )}
+
+      <Card
+        title="Naive vs BastionLoop"
+        subtitle="The same attack corpus runs in both modes. Only the evidence changes."
+        actions={
+          <div className="row-actions">
+            <ModeSwitch mode={mode} onChange={changeMode} busy={busy} />
+            <button className="btn btn-primary btn-xs" onClick={runComparison} disabled={busy}>
+              {busy ? <Spinner label="Running" /> : "Run both baselines"}
+            </button>
+          </div>
+        }
+      >
+        {note && <div className="note-line">{note}</div>}
+        <div className="compare-grid">
+          <div className="compare-col">
+            <div className="compare-head">
+              <span className="compare-title">Naive baseline</span>
+              <StatusPill status="naive" />
+            </div>
+            <p className="muted small">One shared sandbox, one shared model context, no verdict padding, Blue logic exposed. This mode exists only to show what isolation changes.</p>
+            {naive ? (
+              <>
+                <div className="compare-meta mono">
+                  {naive.run_id} · {naive.case_count} cases · freshness {naive.freshness?.clean ? "clean" : "LEAK"}
+                </div>
+                <CanaryHeatmap scan={naive.canary_scan} freshness={naive.freshness} mode="naive" />
+              </>
+            ) : (
+              <div className="empty">No naive run yet. Run both baselines.</div>
+            )}
+          </div>
+          <div className="compare-col">
+            <div className="compare-head">
+              <span className="compare-title">BastionLoop</span>
+              <StatusPill status="hardened" />
+            </div>
+            <p className="muted small">Per-session model, sealed Blue, padded verdicts, signed evidence. This is the isolation claim the PCF proves.</p>
+            {hardened ? (
+              <>
+                <div className="compare-meta mono">
+                  {hardened.run_id} · {hardened.case_count} cases · freshness {hardened.freshness?.clean ? "clean" : "LEAK"}
+                </div>
+                <CanaryHeatmap scan={hardened.canary_scan} freshness={hardened.freshness} mode="hardened" />
+              </>
+            ) : (
+              <div className="empty">No hardened run yet. Run both baselines.</div>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Boundary map" subtitle="Allowed and blocked paths, plus every recorded attempt">
+        <IsolationMap mode={mode} recentAttempts={attempts} />
+      </Card>
+
+      <div className="two-col">
+        <Card title="What the scanner actually covered" subtitle="Honest coverage, not a green check">
+          <ul className="clean-list">
+            <li>Filesystem: private canary files are planted per tenant and scanned for cross-tenant appearance.</li>
+            <li>Model context: Session A plants a canary; Session B tries to retrieve it. The freshness probe is recorded in the PCF.</li>
+            <li>Logs, egress and monitor payloads: scanned for canary commitments, never raw values.</li>
+            <li>Network and environment: marked UNTESTED in local mode; executed by the red probe only under Compose container namespaces.</li>
+            <li>Every leak is named by channel. Evidence stores commitments, not the canary itself.</li>
+          </ul>
+        </Card>
+        <Card title="Run a single mode" subtitle="For a focused demo">
+          <div className="row-actions">
+            <button className="btn btn-ghost" onClick={() => runMode("hardened")} disabled={busy}>
+              Run hardened
+            </button>
+            <button className="btn btn-danger" onClick={() => runMode("naive")} disabled={busy}>
+              Run naive
+            </button>
+          </div>
+          <p className="card-foot">
+            A naive run intentionally fails. Its failure is evidence, not a bug. A hardened run should show zero canary
+            leaks and a clean model freshness probe. If either is false, the Trust Report says so.
+          </p>
+        </Card>
+      </div>
+    </div>
+  );
+}

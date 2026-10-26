@@ -1,0 +1,10 @@
+.git
+.venv
+var
+node_modules
+apps/web/node_modules
+apps/web/dist
+__pycache__
+*.pyc
+.pytest_cache
+*.egg-info

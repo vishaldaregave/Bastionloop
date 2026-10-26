@@ -1,0 +1,16 @@
+{
+  "corpora": [
+    {
+      "name": "advbench_520",
+      "file": "advbench_520.json",
+      "count": 520,
+      "sha256": "9216fd47ac647e26f148030c03bfc7eed8105dfbaede513beec570b6076066bc"
+    },
+    {
+      "name": "jailbreakbench_100",
+      "file": "jailbreakbench_100.json",
+      "count": 100,
+      "sha256": "1e0a009d7800f92dc04179e25faa7b237f75875a0ae7e5306f630ef3c0b791e3"
+    }
+  ]
+}

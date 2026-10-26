@@ -1,0 +1,283 @@
+name: bastionloop
+
+x-core: &core
+  build:
+    context: .
+    dockerfile: infra/docker/core.Dockerfile
+  image: bastionloop/core:local
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+    - seccomp=./security/seccomp.json
+  cap_drop:
+    - ALL
+  environment: &env
+    BASTION_RUNTIME: docker
+    BASTION_DATA_DIR: /data
+    BASTION_KEYS_DIR: /keys
+    BASTION_PINNED_DIR: /pinned
+    BASTION_POLICY_PATH: /policies/policy.json
+    BASTION_ANCHOR_FILE: /data/anchor/anchor.jsonl
+    BASTION_MODEL_ADAPTER: ${BASTION_MODEL_ADAPTER:-mock}
+    BASTION_MODEL_ID: ${BASTION_MODEL_ID:-mock-1b-instruct}
+    BASTION_PADDING_MS: ${BASTION_PADDING_MS:-120}
+    BASTION_CHECKPOINT_EVERY: ${BASTION_CHECKPOINT_EVERY:-4}
+    BASTION_ALLOW_NAIVE: ${BASTION_ALLOW_NAIVE:-1}
+    BASTION_ALLOW_KEY_GEN: ${BASTION_ALLOW_KEY_GEN:-1}
+    BASTION_ADMIN_TOKEN: ${BASTION_ADMIN_TOKEN:-dev-admin-token}
+    BASTION_INTERNAL_TOKEN: ${BASTION_INTERNAL_TOKEN:-dev-internal-token}
+    BASTION_GATEWAY_URL: http://gateway:8000
+    BASTION_NOTARY_URL: http://notary:8001
+    BASTION_SIGNER_URL: http://signer:8002
+    BASTION_WITNESS_URL: http://witness:8003
+    BASTION_ANCHOR_URL: http://anchor:8004
+    BASTION_MODEL_URL: http://model:8005
+    BASTION_BLUE_URL: http://blue:8006
+    BASTION_SUITE_URL: http://suite:8007
+    BASTION_RED_URL: http://red:8010
+    BASTION_GATEWAY_IMAGE_DIGEST: bastionloop/core:local
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+
+x-healthcheck: &healthcheck
+  interval: 5s
+  timeout: 5s
+  retries: 24
+  start_period: 10s
+
+services:
+  init:
+    image: bastionloop/core:local
+    build:
+      context: .
+      dockerfile: infra/docker/core.Dockerfile
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /keys /pinned /policies /gateway /notary /witness /anchor /suite &&
+        chown -R 10001:10001 /keys /pinned /policies /gateway /notary /witness /anchor /suite
+    volumes:
+      - keys:/keys
+      - pinned:/pinned
+      - policies:/policies
+      - gateway-data:/gateway
+      - notary-data:/notary
+      - witness-state:/witness
+      - anchor-data:/anchor
+      - suite-data:/suite
+
+  signer:
+    <<: *core
+    command: ["services.signer.app:app", "--host", "0.0.0.0", "--port", "8002"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - keys:/keys
+      - pinned:/pinned
+    networks: [evidence]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8002/v1/health',timeout=2)"]
+
+  witness:
+    <<: *core
+    command: ["services.witness.app:app", "--host", "0.0.0.0", "--port", "8003"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - keys:/keys
+      - pinned:/pinned
+      - witness-state:/data
+    networks: [evidence]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8003/v1/health',timeout=2)"]
+
+  anchor:
+    <<: *core
+    command: ["services.anchor.app:app", "--host", "0.0.0.0", "--port", "8004"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - anchor-data:/data
+    networks: [evidence]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8004/v1/health',timeout=2)"]
+
+  notary:
+    <<: *core
+    command: ["services.notary.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      signer:
+        condition: service_healthy
+      witness:
+        condition: service_healthy
+      anchor:
+        condition: service_healthy
+    volumes:
+      - notary-data:/data
+      - pinned:/pinned:ro
+    networks: [evidence]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8001/v1/health',timeout=2)"]
+
+  model:
+    <<: *core
+    command: ["workers.model.app:app", "--host", "0.0.0.0", "--port", "8005"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    volumes: []
+    networks: [modelnet]
+    cpus: "1.0"
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8005/v1/health',timeout=2)"]
+
+  blue:
+    <<: *core
+    command: ["workers.blue.app:app", "--host", "0.0.0.0", "--port", "8006"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    volumes: []
+    networks: [bluenet]
+    cpus: "0.5"
+    mem_limit: 192m
+    pids_limit: 128
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8006/v1/health',timeout=2)"]
+
+  red:
+    <<: *core
+    command: ["workers.red.app:app", "--host", "0.0.0.0", "--port", "8010"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    volumes: []
+    environment:
+      <<: *env
+      BASTION_BLUE_HOST: blue
+      BASTION_BLUE_PORT: "8006"
+      BASTION_MODEL_HOST: model
+      BASTION_MODEL_PORT: "8005"
+    networks: [rednet]
+    cpus: "0.5"
+    mem_limit: 192m
+    pids_limit: 128
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8010/v1/health',timeout=2)"]
+
+  gateway:
+    <<: *core
+    command: ["services.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      notary:
+        condition: service_healthy
+      signer:
+        condition: service_healthy
+      witness:
+        condition: service_healthy
+      anchor:
+        condition: service_healthy
+      model:
+        condition: service_healthy
+      blue:
+        condition: service_healthy
+    volumes:
+      - gateway-data:/data
+      - keys:/keys
+      - pinned:/pinned
+      - policies:/policies
+    networks: [edge, evidence, rednet, bluenet, modelnet]
+    cpus: "1.0"
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/v1/health',timeout=4)"]
+
+  suite:
+    <<: *core
+    command: ["services.challenge_suite.app:app", "--host", "0.0.0.0", "--port", "8007"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_healthy
+      red:
+        condition: service_healthy
+      model:
+        condition: service_healthy
+      blue:
+        condition: service_healthy
+    volumes:
+      - suite-data:/data
+      - pinned:/pinned:ro
+      - policies:/policies:ro
+    networks: [evidence, rednet, bluenet, modelnet]
+    cpus: "0.5"
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8007/v1/health',timeout=2)"]
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        VITE_GATEWAY_URL: same-origin
+    image: bastionloop/web:local
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks: [edge]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=32m
+      - /var/run:size=8m
+      - /tmp:size=16m
+
+networks:
+  edge:
+  evidence:
+    internal: true
+  rednet:
+    internal: true
+  bluenet:
+    internal: true
+  modelnet:
+    internal: true
+
+volumes:
+  keys:
+  pinned:
+  policies:
+  gateway-data:
+  notary-data:
+  witness-state:
+  anchor-data:
+  suite-data:
