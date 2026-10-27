@@ -6,6 +6,8 @@ import pytest
 
 from bastion_core.crypto import ensure_keys, load_private_key, load_public_key
 
+from tests.evidence_helpers import make_valid_pcf
+
 
 @pytest.fixture()
 def keys(tmp_path: Path):
@@ -23,3 +25,8 @@ def keys(tmp_path: Path):
         "witness_pub": load_public_key(pinned_dir / "witness.pub"),
         "control_pub": load_public_key(pinned_dir / "control.pub"),
     }
+
+
+@pytest.fixture()
+def pcf_bundle(tmp_path: Path, keys):
+    return make_valid_pcf(tmp_path, keys)

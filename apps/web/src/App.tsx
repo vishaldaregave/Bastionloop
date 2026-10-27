@@ -1,63 +1,215 @@
-import { useState } from "react";
-import { adminToken, api, setAdminToken } from "./api";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { api } from "./api";
 import { useHashRoute, usePolling } from "./hooks";
-import { ErrorBanner, EvidenceValue, SectionTitle, StatusPill } from "./components/UI";
-import { Overview } from "./pages/Overview";
-import { Isolation } from "./pages/Isolation";
-import { RedLab } from "./pages/RedLab";
+import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
+import { Icon, type IconName } from "./components/Icon";
+import { ErrorBanner, StatusPill } from "./components/UI";
+import { Audit } from "./pages/Audit";
 import { BlueLab } from "./pages/BlueLab";
 import { Findings } from "./pages/Findings";
-import { Audit } from "./pages/Audit";
-import { Suite } from "./pages/Suite";
+import { Isolation } from "./pages/Isolation";
 import { Judge } from "./pages/Judge";
+import { Overview } from "./pages/Overview";
+import { RedLab } from "./pages/RedLab";
+import { Settings, type Theme } from "./pages/Settings";
+import { Suite } from "./pages/Suite";
 import { Verifier } from "./pages/Verifier";
 
+type RouteMeta = {
+  section: string;
+  label: string;
+  sectionLabel: string;
+  icon: IconName;
+};
+
+const ROUTES: Record<string, RouteMeta> = {
+  overview: { section: "overview", label: "Overview", sectionLabel: "Overview", icon: "overview" },
+  red: { section: "runs", label: "Test Runs", sectionLabel: "Test Runs", icon: "runs" },
+  blue: { section: "runs", label: "Blue Lab", sectionLabel: "Test Runs", icon: "shield" },
+  isolation: { section: "runs", label: "Isolation", sectionLabel: "Test Runs", icon: "activity" },
+  findings: { section: "findings", label: "Findings", sectionLabel: "Findings", icon: "findings" },
+  audit: { section: "evidence", label: "Evidence & PCFs", sectionLabel: "Evidence & PCFs", icon: "evidence" },
+  suite: { section: "evidence", label: "Trust Report", sectionLabel: "Evidence & PCFs", icon: "activity" },
+  verifier: { section: "verification", label: "Verification", sectionLabel: "Verification", icon: "verification" },
+  judge: { section: "verification", label: "Judge Challenge", sectionLabel: "Verification", icon: "play" },
+  settings: { section: "settings", label: "Settings", sectionLabel: "Settings", icon: "settings" },
+};
+
 const NAV = [
-  { id: "overview", label: "Overview", glyph: "◈", hint: "evidence console" },
-  { id: "isolation", label: "Isolation", glyph: "⬡", hint: "naive vs hardened" },
-  { id: "red", label: "Red lab", glyph: "✦", hint: "runs & findings" },
-  { id: "blue", label: "Blue lab", glyph: "◆", hint: "sealed verdicts" },
-  { id: "findings", label: "Findings", glyph: "▣", hint: "proof bundles" },
-  { id: "audit", label: "Audit", glyph: "⛓", hint: "verify & tamper" },
-  { id: "suite", label: "Suite & report", glyph: "☑", hint: "trust report" },
-  { id: "judge", label: "Judge challenge", glyph: "⚔", hint: "participatory proof" },
-  { id: "verifier", label: "Browser verifier", glyph: "⌘", hint: "no server trust" },
+  { id: "overview", label: "Overview", icon: "overview" as IconName },
+  { id: "runs", label: "Test Runs", icon: "runs" as IconName, route: "red" },
+  { id: "findings", label: "Findings", icon: "findings" as IconName },
+  { id: "evidence", label: "Evidence & PCFs", icon: "evidence" as IconName, route: "audit" },
+  { id: "verification", label: "Verification", icon: "verification" as IconName, route: "verifier" },
+  { id: "settings", label: "Settings", icon: "settings" as IconName },
 ];
 
-const TITLES: Record<string, string> = {
-  overview: "Evidence console",
-  isolation: "Isolation map",
-  red: "Red lab",
-  blue: "Blue lab",
-  findings: "Proof-carrying findings",
-  audit: "Audit explorer",
-  suite: "Challenge suite & Trust Report",
-  judge: "Judge challenge",
-  verifier: "Browser verifier",
+const SUBNAV: Record<string, Array<{ route: string; label: string }>> = {
+  runs: [
+    { route: "red", label: "Runs" },
+    { route: "blue", label: "Blue Lab" },
+    { route: "isolation", label: "Isolation" },
+  ],
+  evidence: [
+    { route: "audit", label: "Timeline" },
+    { route: "suite", label: "Trust Report" },
+  ],
+  verification: [
+    { route: "verifier", label: "Browser verifier" },
+    { route: "judge", label: "Judge challenge" },
+  ],
 };
+
+function readTheme(): Theme {
+  return localStorage.getItem("bastionloop.theme") === "dark" ? "dark" : "light";
+}
+
+function readCollapsed(): boolean {
+  return localStorage.getItem("bastionloop.sidebar") === "collapsed";
+}
 
 export default function App() {
   const [route, navigate] = useHashRoute();
-  const health = usePolling(() => api.get<any>("/v1/health"), 5000);
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const meta = ROUTES[route] ?? ROUTES.overview;
+  const health = usePolling(() => api.get<any>("/v1/health"), 10000);
   const integrity = usePolling(() => api.get<any>("/v1/ledger/verify"), 7000);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [token, setToken] = useState(adminToken());
 
-  const mode = health.data?.mode ?? "hardened";
+  const mode = health.data?.mode;
+  const modelAdapter = health.data?.services?.model?.adapter;
   const verified = integrity.data?.status === "VERIFIED";
-  const integrityStatus = !integrity.data ? "untested" : verified ? "verified" : "unverified";
-  const headSeq = integrity.data?.head?.seq ?? integrity.data?.chain?.head_seq ?? 0;
+  const integrityStatus = integrity.error
+    ? "disconnected"
+    : !integrity.data
+      ? "untested"
+      : verified
+        ? "verified"
+        : "unverified";
 
-  let page: React.ReactNode;
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("bastionloop.theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("bastionloop.sidebar", collapsed ? "collapsed" : "expanded");
+  }, [collapsed]);
+
+  useEffect(() => {
+    let pendingG = false;
+    let timer: number | undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = Boolean(
+        target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable),
+      );
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((current) => !current);
+        return;
+      }
+      if (event.key === "Escape" && paletteOpen) {
+        event.preventDefault();
+        setPaletteOpen(false);
+        return;
+      }
+      if (typing || paletteOpen || event.ctrlKey || event.metaKey || event.altKey) return;
+
+      if (event.key.toLowerCase() === "g") {
+        pendingG = true;
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          pendingG = false;
+        }, 900);
+        return;
+      }
+      if (!pendingG) return;
+      const destinations: Record<string, string> = {
+        o: "overview",
+        t: "red",
+        b: "blue",
+        i: "isolation",
+        f: "findings",
+        e: "audit",
+        r: "suite",
+        v: "verifier",
+        j: "judge",
+        s: "settings",
+      };
+      const destination = destinations[event.key.toLowerCase()];
+      pendingG = false;
+      window.clearTimeout(timer);
+      if (destination) {
+        event.preventDefault();
+        navigate(destination);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.clearTimeout(timer);
+    };
+  }, [navigate, paletteOpen]);
+
+  const commands: PaletteCommand[] = useMemo(
+    () => [
+      ...Object.entries(ROUTES).map(([id, item]) => ({
+        id: `go-${id}`,
+        label: item.label,
+        hint: item.sectionLabel === item.label ? "Open page" : `Open in ${item.sectionLabel}`,
+        keywords: `${id} ${item.sectionLabel}`,
+        icon: item.icon,
+        run: () => navigate(id),
+      })),
+      {
+        id: "toggle-theme",
+        label: theme === "light" ? "Switch to dark theme" : "Switch to light theme",
+        hint: "Appearance",
+        keywords: "theme dark light appearance",
+        icon: theme === "light" ? "moon" : "sun",
+        run: () => setTheme(theme === "light" ? "dark" : "light"),
+      },
+      {
+        id: "toggle-sidebar",
+        label: collapsed ? "Expand sidebar" : "Collapse sidebar",
+        hint: "Layout",
+        keywords: "sidebar collapse expand navigation",
+        icon: "panel",
+        run: () => setCollapsed((current) => !current),
+      },
+      {
+        id: "refresh-health",
+        label: "Refresh service health",
+        hint: "Gateway probe",
+        keywords: "services health refresh",
+        icon: "refresh",
+        run: () => void health.refresh(),
+      },
+      {
+        id: "verify-ledger",
+        label: "Verify ledger now",
+        hint: "Append-only evidence",
+        keywords: "ledger verify chain checkpoint",
+        icon: "verification",
+        run: () => void integrity.refresh(),
+      },
+    ],
+    [collapsed, health, integrity, navigate, theme],
+  );
+
+  let page: ReactNode;
   switch (route) {
-    case "isolation":
-      page = <Isolation />;
-      break;
     case "red":
       page = <RedLab navigate={navigate} />;
       break;
     case "blue":
       page = <BlueLab navigate={navigate} />;
+      break;
+    case "isolation":
+      page = <Isolation />;
       break;
     case "findings":
       page = <Findings navigate={navigate} />;
@@ -74,117 +226,165 @@ export default function App() {
     case "verifier":
       page = <Verifier />;
       break;
+    case "settings":
+      page = (
+        <Settings
+          theme={theme}
+          onThemeChange={setTheme}
+          openPalette={() => setPaletteOpen(true)}
+          sidebarCollapsed={collapsed}
+          onToggleSidebar={() => setCollapsed((current) => !current)}
+        />
+      );
+      break;
     default:
       page = <Overview navigate={navigate} />;
   }
 
   return (
-    <div className="app">
+    <div className={`app ${collapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
-        <button className="brand" onClick={() => navigate("overview")}>
-          <span className="brand-mark">B</span>
-          <span>
-            <span className="brand-name">BASTION<span>LOOP</span></span>
-            <span className="brand-sub">proof-carrying findings</span>
-          </span>
-        </button>
-
-        <nav className="nav">
-          {NAV.map((item) => (
-            <button
-              key={item.id}
-              className={`nav-item ${route === item.id ? "active" : ""}`}
-              onClick={() => navigate(item.id)}
-            >
-              <span className="nav-glyph">{item.glyph}</span>
-              <span className="nav-labels">
-                <span className="nav-label">{item.label}</span>
-                <span className="nav-hint">{item.hint}</span>
+        <div className="sidebar-brand-row">
+          <button className="brand" onClick={() => navigate("overview")} aria-label="BastionLoop overview">
+            <span className="brand-mark">B</span>
+            {!collapsed && (
+              <span className="brand-copy">
+                <span className="brand-name">BastionLoop</span>
+                <span className="brand-sub">Evidence workbench</span>
               </span>
-            </button>
-          ))}
+            )}
+          </button>
+          <button
+            className="icon-button collapse-button"
+            onClick={() => setCollapsed((current) => !current)}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!collapsed}
+          >
+            <Icon name="panel" size={15} />
+          </button>
+        </div>
+
+        <nav className="nav" aria-label="Primary">
+          {NAV.map((item) => {
+            const active = meta.section === item.id;
+            const destination = item.route ?? item.id;
+            return (
+              <button
+                key={item.id}
+                className={`nav-item ${active ? "active" : ""}`}
+                onClick={() => navigate(destination)}
+                aria-current={active ? "page" : undefined}
+                title={collapsed ? item.label : undefined}
+              >
+                <span className="nav-glyph"><Icon name={item.icon} size={16} /></span>
+                {!collapsed && <span className="nav-label">{item.label}</span>}
+                {!collapsed && active && <span className="nav-active-dot" aria-hidden="true" />}
+              </button>
+            );
+          })}
         </nav>
 
         <div className="sidebar-foot">
-          <div className="foot-line">
-            <span>mode</span>
-            <StatusPill status={mode} label={mode.toUpperCase()} />
-          </div>
-          <div className="foot-line">
-            <span>integrity</span>
-            <StatusPill status={verified ? "verified" : integrity.data ? "failed" : "untested"} />
-          </div>
-          <div className="foot-mini">
-            <EvidenceValue
-              value={`${integrity.data?.counts?.events ?? 0} events`}
-              evidenceId={headSeq ? `seq:${headSeq}` : null}
-              status={integrityStatus}
-            />
-          </div>
-          <button className="btn btn-ghost btn-xs full" onClick={() => navigate("judge")}>
-            Run judge challenge
-          </button>
+          {!collapsed ? (
+            <>
+              <div className="sidebar-status">
+                <span className={`status-dot ${verified ? "ok" : integrity.error ? "bad" : "idle"}`} />
+                <span>{integrity.error ? "Gateway disconnected" : verified ? "Ledger verified" : integrity.data ? "Ledger failed" : "No evidence"}</span>
+              </div>
+              <div className="sidebar-meta">
+                <span>{integrity.data?.counts?.events ?? 0} events</span>
+                <span>·</span>
+                <span>{mode ? mode.toUpperCase() : "MODE UNKNOWN"}</span>
+              </div>
+              <div className="sidebar-meta">
+                <span>{modelAdapter ? `${modelAdapter.toUpperCase()} MODEL` : "MODEL UNKNOWN"}</span>
+              </div>
+            </>
+          ) : (
+            <span className={`status-dot ${verified ? "ok" : integrity.error ? "bad" : "idle"}`} title={integrityStatus} />
+          )}
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
           <div className="topbar-left">
-            <span className="crumb">BASTIONLOOP /</span>
-            <span className="topbar-title">{TITLES[route] ?? "Evidence console"}</span>
+            <span className="crumb">BastionLoop</span>
+            {meta.sectionLabel !== meta.label && (
+              <>
+                <Icon name="chevron-right" size={12} className="crumb-separator" />
+                <span className="crumb">{meta.sectionLabel}</span>
+              </>
+            )}
+            <Icon name="chevron-right" size={12} className="crumb-separator" />
+            <span className="topbar-title">{meta.label}</span>
           </div>
           <div className="topbar-right">
-            <span className="policy-chip mono">{health.data?.policy?.version ?? "policy?"}</span>
-            <StatusPill status={mode} label={mode === "naive" ? "NAIVE DEMO" : "HARDENED"} />
-            <button
-              className={`pill pill-${verified ? "verified" : integrity.data ? "failed" : "untested"} pill-button`}
-              onClick={() => navigate("audit")}
-            >
-              {verified ? "LEDGER VERIFIED" : integrity.data ? "LEDGER FAILED" : "NO EVIDENCE"}
+            <button className="search-trigger" onClick={() => setPaletteOpen(true)} aria-label="Open command palette">
+              <Icon name="search" size={14} />
+              <span>Search</span>
+              <kbd>Ctrl K</kbd>
             </button>
-            <button className="icon-button" title="Admin token" onClick={() => setSettingsOpen((value) => !value)}>
-              ⚙
+            <button
+              className="icon-button"
+              title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+              aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            >
+              <Icon name={theme === "light" ? "moon" : "sun"} size={15} />
+            </button>
+            <button
+              className={`icon-button ${route === "settings" ? "active" : ""}`}
+              title="Settings"
+              aria-label="Settings"
+              onClick={() => navigate("settings")}
+            >
+              <Icon name="settings" size={15} />
             </button>
           </div>
         </header>
 
-        {health.error && <ErrorBanner message={`${health.error}. Is the gateway running?`} onRetry={health.refresh} />}
+        {SUBNAV[meta.section] && (
+          <div className="subnav" role="navigation" aria-label={`${meta.sectionLabel} views`}>
+            {SUBNAV[meta.section].map((tab) => (
+              <button
+                key={tab.route}
+                className={`subnav-item ${route === tab.route ? "active" : ""}`}
+                onClick={() => navigate(tab.route)}
+                aria-current={route === tab.route ? "page" : undefined}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
 
-        {settingsOpen && (
-          <div className="settings-panel">
-            <div>
-              <strong>Demo admin token</strong>
-              <p className="muted small">
-                Stored in localStorage. This is a hackathon demo credential, not a production auth system. The gateway
-                still enforces scoped capability tokens for judges and red workers.
-              </p>
-            </div>
-            <input
-              className="input"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              placeholder="dev-admin-token"
+        {health.error && (
+          <div className="content-alert">
+            <ErrorBanner
+              title="Gateway disconnected"
+              message={`${health.error}. Data below may be stale.`}
+              onRetry={health.refresh}
             />
-            <button
-              className="btn btn-primary btn-xs"
-              onClick={() => {
-                setAdminToken(token);
-                window.location.reload();
-              }}
-            >
-              Save & reload
-            </button>
           </div>
         )}
 
         <div className="content">{page}</div>
 
         <footer className="footer">
-          <span>BastionLoop · Bayora Problem 04</span>
-          <span>Evidence over claims. Passed means the tested control held on the tested path.</span>
+          <span>BastionLoop · evidence workbench</span>
+          <span className="footer-status">
+            <StatusPill
+              status={verified ? "verified" : integrity.error ? "disconnected" : integrity.data ? "failed" : "untested"}
+              label={integrity.error ? "GATEWAY DISCONNECTED" : verified ? "LEDGER VERIFIED" : integrity.data ? "LEDGER FAILED" : "NO EVIDENCE"}
+            />
+          </span>
           <span className="mono">gateway {health.data?.gateway_image ?? "unknown"}</span>
         </footer>
       </main>
+
+      <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

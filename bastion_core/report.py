@@ -76,14 +76,21 @@ INFRA_CATEGORIES = {"isolation", "network", "access", "audit", "resource", "moni
 MODEL_CATEGORIES = {"llm"}
 
 
+def _status(challenge: dict[str, Any]) -> str:
+    return str(challenge.get("status", "")).upper()
+
+
 def build_trust_report(payload: dict[str, Any]) -> dict[str, Any]:
     challenges = payload.get("challenges", [])
-    passed = [c for c in challenges if c.get("status") == "pass"]
-    failed = [c for c in challenges if c.get("status") == "fail"]
-    untested = [c for c in challenges if c.get("status") == "untested"]
-    recorded = [c for c in challenges if c.get("status") == "recorded"]
+    passed = [c for c in challenges if _status(c) == "PASS"]
+    failed = [c for c in challenges if _status(c) == "FAIL"]
+    errors = [c for c in challenges if _status(c) == "ERROR"]
+    untested = [c for c in challenges if _status(c) == "UNTESTED"]
+    recorded = [c for c in challenges if _status(c) == "RECORDED"]
     infra_failures = [c for c in failed if c.get("category") in INFRA_CATEGORIES]
     model_failures = [c for c in failed if c.get("category") in MODEL_CATEGORIES]
+    infra_errors = [c for c in errors if c.get("category") in INFRA_CATEGORIES]
+    model_errors = [c for c in errors if c.get("category") in MODEL_CATEGORIES]
     findings = payload.get("findings", [])
     report = {
         "report_version": "1.0",
@@ -95,15 +102,20 @@ def build_trust_report(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "mode": payload.get("mode"),
         "runtime": payload.get("runtime"),
+        "model_adapter": payload.get("model_adapter"),
+        "model_testing_kind": payload.get("model_testing_kind"),
         "versions": payload.get("versions", {}),
         "summary": {
             "passed": len(passed),
             "failed": len(failed),
+            "errors": len(errors),
             "untested": len(untested),
             "recorded": len(recorded),
             "total": len(challenges),
             "infrastructure_failures": len(infra_failures),
+            "infrastructure_errors": len(infra_errors),
             "model_safety_failures": len(model_failures),
+            "model_safety_errors": len(model_errors),
             "findings": len(findings),
         },
         "evidence_integrity": payload.get("integrity", {}),
@@ -111,12 +123,15 @@ def build_trust_report(payload: dict[str, Any]) -> dict[str, Any]:
         "failure_split": {
             "infrastructure": [c["test_id"] for c in infra_failures],
             "model_safety": [c["test_id"] for c in model_failures],
+            "infrastructure_errors": [c["test_id"] for c in infra_errors],
+            "model_safety_errors": [c["test_id"] for c in model_errors],
         },
         "findings": findings,
         "timing": payload.get("timing", {}),
         "overhead": payload.get("overhead", {}),
         "coverage": {
             "tested": [c["test_id"] for c in passed + failed],
+            "errors": [{"test_id": c["test_id"], "reason": c.get("detail")} for c in errors],
             "recorded": [c["test_id"] for c in recorded],
             "untested": [{"test_id": c["test_id"], "reason": c.get("detail")} for c in untested],
         },
@@ -139,14 +154,17 @@ def render_text(report: dict[str, Any]) -> str:
         report["title"],
         "=" * len(report["title"]),
         f"Generated: {report['generated_at']}",
-        f"Mode: {report.get('mode')}  Runtime: {report.get('runtime')}",
+        f"Mode: {report.get('mode')}  Runtime: {report.get('runtime')}  "
+        f"Model: {report.get('model_adapter')} ({report.get('model_testing_kind')})",
         "",
         "SUMMARY",
         f"  passed={report['summary']['passed']} failed={report['summary']['failed']} "
-        f"untested={report['summary']['untested']} recorded={report['summary']['recorded']} "
-        f"findings={report['summary']['findings']}",
+        f"errors={report['summary'].get('errors', 0)} untested={report['summary']['untested']} "
+        f"recorded={report['summary']['recorded']} findings={report['summary']['findings']}",
         f"  infrastructure failures={report['summary']['infrastructure_failures']} "
-        f"model safety failures={report['summary']['model_safety_failures']}",
+        f"infrastructure errors={report['summary'].get('infrastructure_errors', 0)} "
+        f"model safety failures={report['summary']['model_safety_failures']} "
+        f"model safety errors={report['summary'].get('model_safety_errors', 0)}",
         "",
         "EVIDENCE INTEGRITY",
         f"  status={report['evidence_integrity'].get('status', 'UNKNOWN')}",
@@ -157,7 +175,11 @@ def render_text(report: dict[str, Any]) -> str:
     lines.append("CHALLENGES")
     for challenge in report["challenges"]:
         lines.append("  " + _status_line(challenge))
-        lines.append(f"           evidence={challenge.get('evidence_id')} detail={challenge.get('detail', '')}")
+        lines.append(
+            f"           evidence={challenge.get('evidence_id')} "
+            f"seq={challenge.get('evidence_seq')} limitations={challenge.get('limitations', '')}"
+        )
+        lines.append(f"           detail={challenge.get('detail', '')}")
     lines.append("")
     lines.append("FINDINGS")
     for finding in report["findings"]:
@@ -172,9 +194,11 @@ def render_text(report: dict[str, Any]) -> str:
     lines.append("OVERHEAD")
     lines.append(json.dumps(report.get("overhead", {}), indent=2))
     lines.append("")
-    lines.append("COVERAGE / NOT TESTED")
+    lines.append("COVERAGE / ERRORS / NOT TESTED")
+    for item in report["coverage"].get("errors", []):
+        lines.append(f"  - ERROR {item['test_id']}: {item['reason']}")
     for item in report["coverage"]["untested"]:
-        lines.append(f"  - {item['test_id']}: {item['reason']}")
+        lines.append(f"  - UNTESTED {item['test_id']}: {item['reason']}")
     lines.append("")
     lines.append("RESIDUAL RISK REGISTER")
     for risk in report["residual_risk_register"]:
@@ -192,14 +216,16 @@ def render_html(report: dict[str, Any]) -> str:
 
     rows = []
     for c in report["challenges"]:
+        status = _status(c)
         rows.append(
             "<tr>"
-            f"<td class='status {esc(c.get('status'))}'>{esc(c.get('status'))}</td>"
+            f"<td class='status {esc(status.lower())}'>{esc(status)}</td>"
             f"<td>{esc(c.get('test_id'))}</td>"
             f"<td>{esc(c.get('name'))}</td>"
             f"<td>{esc(c.get('expected'))}</td>"
             f"<td>{esc(c.get('actual'))}</td>"
             f"<td class='mono'>{esc(c.get('evidence_id'))}</td>"
+            f"<td>{esc(c.get('limitations'))}</td>"
             "</tr>"
         )
     finding_rows = "".join(
@@ -222,21 +248,22 @@ def render_html(report: dict[str, Any]) -> str:
 body{{background:#0d1117;color:#d6deeb;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:40px}}
 h1{{font-size:28px;margin:0 0 4px}} h2{{font-size:16px;letter-spacing:.08em;text-transform:uppercase;color:#7f8ea3;margin:28px 0 10px}}
 .sub{{color:#8b98a9;margin-bottom:24px}}
-.summary{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}}
+.summary{{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}}
 .card{{border:1px solid #1e2a3a;border-radius:8px;padding:12px;background:#111826}}
 .card b{{display:block;font-size:24px;color:#e6edf3}} .card span{{color:#7f8ea3;font-size:12px}}
 table{{border-collapse:collapse;width:100%;margin-top:8px}}
 th,td{{text-align:left;padding:7px 9px;border-bottom:1px solid #1b2534;vertical-align:top}}
 th{{color:#7f8ea3;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}}
-.status{{font-weight:700}} .pass{{color:#46d19b}} .fail{{color:#ff6b6b}} .untested{{color:#e3b341}}
+.status{{font-weight:700}} .pass{{color:#46d19b}} .fail{{color:#ff6b6b}} .error{{color:#ff9f43}} .untested{{color:#e3b341}}
 .mono{{font-size:12px;color:#9fb0c7}} .issues li{{color:#e3b341}}
 .note{{border-left:2px solid #2c3a4d;padding-left:14px;color:#9fb0c7}}
 </style></head><body>
 <h1>{esc(report['title'])}</h1>
-<div class="sub">{esc(report['statement'])}<br>Generated {esc(report['generated_at'])} · mode {esc(report.get('mode'))} · runtime {esc(report.get('runtime'))}</div>
+<div class="sub">{esc(report['statement'])}<br>Generated {esc(report['generated_at'])} · mode {esc(report.get('mode'))} · runtime {esc(report.get('runtime'))} · model {esc(report.get('model_adapter'))} ({esc(report.get('model_testing_kind'))})</div>
 <div class="summary">
 <div class="card"><b>{report['summary']['passed']}</b><span>passed</span></div>
 <div class="card"><b>{report['summary']['failed']}</b><span>failed</span></div>
+<div class="card"><b>{report['summary'].get('errors', 0)}</b><span>errors</span></div>
 <div class="card"><b>{report['summary']['untested']}</b><span>untested</span></div>
 <div class="card"><b>{report['summary']['findings']}</b><span>findings</span></div>
 <div class="card"><b>{report['summary']['infrastructure_failures']}</b><span>infra failures</span></div>
@@ -245,11 +272,11 @@ th{{color:#7f8ea3;font-weight:600;font-size:12px;text-transform:uppercase;letter
 <h2>Evidence integrity</h2>
 <p class="note">status: <b>{esc(report['evidence_integrity'].get('status', 'UNKNOWN'))}</b> · events checked: {esc(report['evidence_integrity'].get('chain', {}).get('events_checked', 0))} · checkpoints: {esc(report['evidence_integrity'].get('counts', {}).get('checkpoints', 0))}</p>
 <h2>Challenges</h2>
-<table><thead><tr><th>Status</th><th>ID</th><th>Test</th><th>Expected</th><th>Actual</th><th>Evidence</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
+<table><thead><tr><th>Status</th><th>ID</th><th>Test</th><th>Expected</th><th>Actual</th><th>Evidence</th><th>Limitations</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
 <h2>Findings</h2>
 <table><thead><tr><th>Finding</th><th>Type</th><th>Severity</th><th>Case</th></tr></thead><tbody>{finding_rows or '<tr><td colspan="4">none</td></tr>'}</tbody></table>
-<h2>Coverage not tested</h2>
-<ul class="issues">{''.join(f'<li>{esc(i["test_id"])}: {esc(i["reason"])}</li>' for i in report['coverage']['untested']) or '<li>none</li>'}</ul>
+<h2>Coverage errors and not tested</h2>
+<ul class="issues">{((''.join(f'<li>ERROR {esc(i["test_id"])}: {esc(i["reason"])}</li>' for i in report['coverage'].get('errors', []))) + (''.join(f'<li>UNTESTED {esc(i["test_id"])}: {esc(i["reason"])}</li>' for i in report['coverage']['untested']))) or '<li>none</li>'}</ul>
 <h2>Residual risk register</h2>
 <table><thead><tr><th>Threat</th><th>Control</th><th>Residual</th><th>Future</th></tr></thead><tbody>{risk_rows}</tbody></table>
 <h2>Non-claims</h2>
@@ -282,7 +309,8 @@ def render_pdf(report: dict[str, Any], path: Path) -> Path:
     write(pdf, report["statement"], size=9, height=5)
     write(
         pdf,
-        f"Generated: {report['generated_at']}  Mode: {report.get('mode')}  Runtime: {report.get('runtime')}",
+        f"Generated: {report['generated_at']}  Mode: {report.get('mode')}  Runtime: {report.get('runtime')}  "
+        f"Model: {report.get('model_adapter')} ({report.get('model_testing_kind')})",
         size=9,
         height=5,
     )
@@ -292,12 +320,15 @@ def render_pdf(report: dict[str, Any], path: Path) -> Path:
     write(
         pdf,
         f"Passed: {summary['passed']}   Failed: {summary['failed']}   "
-        f"Untested: {summary['untested']}   Recorded: {summary.get('recorded', 0)}",
+        f"Errors: {summary.get('errors', 0)}   Untested: {summary['untested']}   "
+        f"Recorded: {summary.get('recorded', 0)}",
     )
     write(
         pdf,
         f"Findings: {summary['findings']}   Infrastructure failures: {summary['infrastructure_failures']}   "
-        f"Model safety failures: {summary['model_safety_failures']}",
+        f"Infrastructure errors: {summary.get('infrastructure_errors', 0)}   "
+        f"Model safety failures: {summary['model_safety_failures']}   "
+        f"Model safety errors: {summary.get('model_safety_errors', 0)}",
     )
     write(pdf, f"Evidence integrity: {report['evidence_integrity'].get('status', 'UNKNOWN')}")
 
@@ -307,14 +338,16 @@ def render_pdf(report: dict[str, Any], path: Path) -> Path:
             pdf,
             f"[{challenge.get('status', '?').upper()}] {challenge.get('test_id')} {challenge.get('name')} | "
             f"expected: {challenge.get('expected')} | actual: {challenge.get('actual')} | "
-            f"evidence: {challenge.get('evidence_id')}",
+            f"evidence: {challenge.get('evidence_id')} | limitations: {challenge.get('limitations')}",
             size=8,
             height=4.5,
         )
 
-    heading(pdf, "Coverage not tested")
+    heading(pdf, "Coverage errors and not tested")
+    for item in report["coverage"].get("errors", []):
+        write(pdf, f"- ERROR {item['test_id']}: {item['reason']}", size=8, height=4.5)
     for item in report["coverage"]["untested"]:
-        write(pdf, f"- {item['test_id']}: {item['reason']}", size=8, height=4.5)
+        write(pdf, f"- UNTESTED {item['test_id']}: {item['reason']}", size=8, height=4.5)
 
     heading(pdf, "Residual risk register")
     for risk in report["residual_risk_register"]:

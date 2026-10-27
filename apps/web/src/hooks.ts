@@ -5,9 +5,12 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 3000, deps: unk
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const fnRef = useRef(fn);
+  const inFlight = useRef(false);
   fnRef.current = fn;
 
   const refresh = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const result = await fnRef.current();
       setData(result);
@@ -15,6 +18,7 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 3000, deps: unk
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   }, []);

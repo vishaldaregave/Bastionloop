@@ -12,7 +12,10 @@ export function PcfPanel({
   onBrowserVerify?: () => void;
 }) {
   if (!pcf) return null;
-  const status = verification?.status ?? "UNTESTED";
+  const rawStatus = verification?.status;
+  const status = rawStatus ?? "UNTESTED";
+  const pillStatus =
+    rawStatus === "VERIFIED" ? "verified" : rawStatus === "FAILED" ? "failed" : rawStatus === "ERROR" ? "error" : "untested";
   const issues = verification?.issues ?? [];
   const chain = pcf.chain ?? {};
   const checkpoint = chain.checkpoint ?? {};
@@ -20,6 +23,22 @@ export function PcfPanel({
   const freshness = pcf.model?.freshness_proof ?? {};
   const canary = pcf.canary_scan ?? {};
   const dlp = pcf.dlp ?? {};
+  const signature = pcf.signatures?.signer ?? {};
+  const canaryClean = canary.clean;
+  const freshnessClean = freshness.clean;
+  const notExercised = Array.isArray(canary.channels_not_exercised) ? canary.channels_not_exercised.length : 0;
+  const isolation =
+    canaryClean === false || freshnessClean === false
+      ? "NO — evidence shows a leak"
+      : canaryClean === true && freshnessClean === true
+        ? notExercised > 0
+          ? `PARTIAL — ${notExercised} channel(s) untested`
+          : "Evidence-backed"
+        : "UNPROVEN — missing scan/freshness";
+  const anchorSource = verification?.anchor_source;
+  const independent = verification?.independent_verification;
+  const modelAdapter = pcf.run?.adapter;
+  const modelKind = modelAdapter === "mock" ? "MOCK MODEL" : modelAdapter ? "REAL MODEL" : "MODEL UNKNOWN";
   return (
     <div className="pcf">
       <div className="pcf-head">
@@ -33,7 +52,14 @@ export function PcfPanel({
           </p>
         </div>
         <div className="pcf-actions">
-          <StatusPill status={status === "VERIFIED" ? "verified" : "failed"} label={status} />
+          <StatusPill status={pillStatus} label={status} />
+          <StatusPill status={modelAdapter === "mock" ? "untested" : modelAdapter ? "pass" : "warn"} label={modelKind} />
+          {anchorSource && (
+            <StatusPill
+              status={independent ? "pass" : "warn"}
+              label={independent ? "INDEPENDENT ANCHOR" : `ANCHOR ${String(anchorSource).toUpperCase()}`}
+            />
+          )}
           {onDownload && (
             <button className="btn btn-ghost btn-xs" onClick={onDownload}>
               Download PCF
@@ -48,12 +74,50 @@ export function PcfPanel({
       </div>
 
       <div className="pcf-verdict">
-        <Field label="Blue verdict" value={pcf.verdict?.decision} mono />
-        <Field label="Isolation held" value={pcf.trust ? (pcf.finding_type === "cross-session-leak" ? "NO" : "YES") : "—"} />
-        <Field label="Model" value={`${pcf.run?.adapter ?? "?"} / ${pcf.run?.model_id ?? "?"}`} mono />
-        <Field label="Mode" value={pcf.run?.mode} />
+        <Field label="Blue verdict" value={pcf.verdict?.decision ?? "—"} mono />
+        <Field label="Isolation evidence" value={isolation} />
+        <Field
+          label="Model"
+          value={`${pcf.run?.adapter ?? "unknown"} / ${pcf.run?.model_id ?? "unknown"}`}
+          mono
+        />
+        <Field label="Mode" value={pcf.run?.mode ?? "—"} />
         <Field label="Policy" value={`${pcf.policy?.version ?? "?"} · ${String(pcf.policy?.bundle_hash ?? "").slice(0, 12)}…`} mono />
         <Field label="Benchmark" value={`${pcf.run?.benchmark_id ?? "?"} @ ${pcf.run?.benchmark_version ?? "?"}`} mono />
+      </div>
+
+      <div className="pcf-grid">
+        <div className="pcf-box">
+          <h3>Verification</h3>
+          <Field label="Status" value={<StatusPill status={pillStatus} label={status} />} />
+          <Field label="Anchor source" value={anchorSource ?? "missing"} mono />
+          <Field label="Independent anchor" value={independent === true ? "yes" : independent === false ? "no" : "unknown"} />
+          <Field label="Anchor checked" value={verification?.anchor_checked === true ? "yes" : verification?.anchor_checked === false ? "no" : "unknown"} />
+          <Field
+            label="First broken link"
+            value={
+              verification?.first_broken_link
+                ? `seq ${verification.first_broken_link.seq} (${verification.first_broken_link.reason})`
+                : "none"
+            }
+            mono
+          />
+        </div>
+        <div className="pcf-box">
+          <h3>Trusted signature inputs</h3>
+          <Field label="Signer key id" value={signature.key_id ?? "missing"} mono />
+          <Field label="Algorithm" value={signature.algorithm ?? "missing"} mono />
+          <Field label="Domain" value={signature.domain ?? "missing"} mono />
+          <Field label="Signed payload" value={signature.payload_b64 ? `${signature.payload_b64.length} b64 chars` : "not embedded"} mono />
+          <Field label="Threshold" value="pinned signer + pinned witness" />
+        </div>
+        <div className="pcf-box">
+          <h3>Checkpoint signers</h3>
+          <Field label="Signer key id" value={checkpoint.signer_key_id ?? "unknown"} mono />
+          <Field label="Witness key id" value={checkpoint.witness_key_id ?? "unknown"} mono />
+          <Field label="Step" value="verify signer → witness → chain → anchor" />
+          <Field label="Evidence ref" value={`ledger seq ${chain.seq ?? "?"}`} mono />
+        </div>
       </div>
 
       <div className="pcf-grid">
@@ -92,6 +156,14 @@ export function PcfPanel({
               <span>{issue.detail}</span>
             </div>
           ))}
+        </div>
+      )}
+      {status !== "VERIFIED" && issues.length === 0 && (
+        <div className="pcf-issues" role="status">
+          <h3>Verification incomplete</h3>
+          <p className="muted small">
+            No verifier result was returned for this bundle. The signature, checkpoint and anchor claims are UNTESTED.
+          </p>
         </div>
       )}
 

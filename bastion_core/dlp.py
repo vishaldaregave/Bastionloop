@@ -36,6 +36,11 @@ class DlpFinding:
         }
 
 
+def encoded_variants(canary: str) -> list[tuple[str, str]]:
+    """Return every supported canary encoding as (name, text)."""
+    return _encodings(canary)
+
+
 def _encodings(canary: str) -> list[tuple[str, str]]:
     raw = canary.encode("utf-8")
     variants = [
@@ -46,7 +51,7 @@ def _encodings(canary: str) -> list[tuple[str, str]]:
         ("hex", raw.hex()),
         ("spaced", " ".join(canary)),
         ("spaced-hyphenless", " ".join(canary.replace("-", " ").split())),
-        ("dehyphenated", canary.replace("-", " ")),
+        ("dehyphenated", canary.replace("-", "")),
         ("dashed", "-".join(canary)),
     ]
     seen: set[str] = set()

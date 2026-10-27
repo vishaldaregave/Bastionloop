@@ -57,6 +57,18 @@ python scripts/dev.py --demo --once --clean
 
 The demo creates hardened and naive runs, builds signed PCFs, verifies the ledger, tampers with a disposable copy, runs the challenge suite, and writes the Trust Report JSON/PDF.
 
+Run the repeatable validation suite (and optionally inject live witness/anchor outages):
+
+```bash
+python scripts/integration_test.py --clean --allow-model-failures
+python scripts/integration_test.py --clean --faults --allow-model-failures
+# or: make integration / make integration-faults
+```
+
+The suite never turns an exception, timeout or missing dependency into PASS. Statuses are distinct: **PASS**, **FAIL**, **ERROR**, **UNTESTED**. A model-safety `FAIL` is reported separately from infrastructure failures; a deterministic mock-model result is not generalized to a real model. Container, namespace and cgroup tests are `UNTESTED` when Docker is unavailable; the report explains the exact Compose prerequisite. Network probes use controlled local `.invalid`/loopback negative controls, never public Internet or real cloud metadata endpoints.
+
+Release evidence and operating procedures: [`docs/RELEASE_STATUS.md`](docs/RELEASE_STATUS.md), [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md), [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md), [`docs/RESIDUAL_RISK.md`](docs/RESIDUAL_RISK.md).
+
 ### Container deployment
 
 ```bash
@@ -67,9 +79,30 @@ docker compose up --build -d
 
 Only the web edge is published. The gateway and every tenant service are on internal Docker networks. The dashboard proxies `/v1` to the gateway.
 
-Compose hardening is validated statically by `python scripts/check_compose.py`: internal tenant networks, read-only tenant containers, `cap_drop: ALL`, `no-new-privileges`, the seccomp deny-list, pids/memory/CPU limits, and no published service ports besides the web edge. This workstation has no Docker daemon, so the local stack is the exercised demo path; the Compose path is the deployment artifact.
+Compose now requires explicit credentials and `BASTION_ENV`; there are no fallback demo credentials in `compose.yaml`. The `.env.example` file is development-only. For production, use `.env.production.example`, generate 32+ byte random secrets, set `BASTION_ENV=production`, disable every `BASTION_ALLOW_*` demo switch, provision separate signing keys, and provide a real gateway image digest. The gateway and services fail closed when required configuration or keys are missing.
 
-Default demo credentials: admin token `dev-admin-token` (change it in `.env`).
+Compose hardening is validated statically by `python scripts/check_compose.py`: internal tenant networks, read-only tenant containers, `cap_drop: ALL`, `no-new-privileges`, the seccomp deny-list, pids/memory/CPU limits, no published service ports besides the web edge, separated signer/witness/control key volumes, and explicit required credentials.
+
+### Security configuration
+
+| Variable | Development | Production |
+|---|---|---|
+| `BASTION_ENV` | `development` | `production` |
+| `BASTION_RUNTIME` | `local` or `docker` | must be `docker` |
+| `BASTION_ADMIN_TOKEN` | demo value in `.env.example` | required, unique, 32+ high-entropy chars |
+| `BASTION_INTERNAL_TOKEN` | demo value in `.env.example` | required, unique, 32+ high-entropy chars |
+| `BASTION_ALLOW_KEY_GEN` | `1` for the local demo | must be `0`; keys are provisioned |
+| `BASTION_ALLOW_NAIVE` | `1` for the comparison demo | must be `0` |
+| `BASTION_ALLOW_TAMPER` | `1` for the tamper demo | must be `0` |
+| `BASTION_ALLOW_JUDGE` | `1` for the judge demo | must be `0` |
+| `BASTION_GATEWAY_IMAGE_DIGEST` | dev digest | required `sha256:` image digest |
+| `BASTION_CORS_ORIGINS` | local Vite origins | empty for same-origin web, or explicit origins |
+
+Production startup fails if the admin and internal tokens are missing, shorter than 32 characters, equal to each other, or contain demo/placeholder values. `BASTION_MODE=naive`, `BASTION_RUNTIME=local`, development key generation, naive mode, the tamper simulator and the judge challenge are all rejected in production.
+
+Signer, witness and control private keys live in separate Compose volumes. Tenant containers mount no keys, no pinned keys and no host volumes. The pinned public-key volume is read-only for the notary and suite. The gateway never mounts the signer or witness private keys.
+
+This workstation has no Docker daemon, so the local stack is the exercised demo path; the Compose path is statically validated by `scripts/check_compose.py`.
 
 ---
 
@@ -207,7 +240,7 @@ bastion serve --demo --once
 ## Tests
 
 ```bash
-python -m pytest -q          # 31 unit tests: ledger, verifier, tokens, policy, DLP, timing, PCF, report
+python -m pytest -q          # 63 tests: ledger, verifier, tokens, policy, DLP, timing, PCF, report, production config, service auth, gateway authz
 python scripts/dev.py --demo --once --clean   # end-to-end demo assertions
 python scripts/check_compose.py               # Compose security invariants
 npm --prefix apps/web run build               # TypeScript + production build

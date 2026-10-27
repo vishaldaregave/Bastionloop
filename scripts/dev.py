@@ -44,10 +44,18 @@ URLS = {
 
 def _env() -> dict[str, str]:
     env = os.environ.copy()
+    env.setdefault("BASTION_ENV", "development")
     env.setdefault("BASTION_RUNTIME", "local")
     env.setdefault("BASTION_MODEL_ADAPTER", "mock")
     env.setdefault("BASTION_CHECKPOINT_EVERY", "4")
     env.setdefault("BASTION_PADDING_MS", "120")
+    # These are explicit development-only switches. Do not copy them into production.
+    env.setdefault("BASTION_ALLOW_KEY_GEN", "1")
+    env.setdefault("BASTION_ALLOW_NAIVE", "1")
+    env.setdefault("BASTION_ALLOW_TAMPER", "1")
+    env.setdefault("BASTION_ALLOW_JUDGE", "1")
+    env.setdefault("BASTION_ADMIN_TOKEN", "dev-admin-token")
+    env.setdefault("BASTION_INTERNAL_TOKEN", "dev-internal-token")
     for name, url in URLS.items():
         env.setdefault(f"BASTION_{name.upper()}_URL", url)
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")

@@ -7,6 +7,7 @@ import {
   Empty,
   ErrorBanner,
   Field,
+  Loading,
   SectionTitle,
   Spinner,
   StatusPill,
@@ -28,6 +29,7 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [tamperResult, setTamperResult] = useState<any>(null);
   const [tamperBusy, setTamperBusy] = useState<string | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadedPcf, setUploadedPcf] = useState<any>(null);
@@ -44,11 +46,24 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
     );
   }, [events.data, filter]);
 
-  const status = integrity.data?.status;
+  const status = integrity.error ? "DISCONNECTED" : integrity.data?.status;
   const verified = status === "VERIFIED";
 
   async function verifyNow() {
-    await integrity.refresh();
+    setVerifyBusy(true);
+    try {
+      await integrity.refresh();
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  async function exportLedger() {
+    try {
+      await api.download("/v1/ledger/export", "bastionloop-ledger.json");
+    } catch (err) {
+      setTamperResult({ error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   async function tamper(mode: string) {
@@ -83,18 +98,28 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
 
   return (
     <div className="page">
-      <SectionTitle hint="The ledger is append-only at the application layer, but the real proof is that a third party can recompute the chain, both signatures and the external anchor.">
-        Audit explorer
+      <SectionTitle hint="Append-only evidence, verifier results and controlled tamper tests. Technical provenance stays available on demand.">
+        Evidence & PCFs
       </SectionTitle>
 
       {(events.error || integrity.error) && (
         <ErrorBanner message={events.error || integrity.error || ""} onRetry={() => { void events.refresh(); void integrity.refresh(); }} />
       )}
 
-      <div className={`integrity-hero ${verified ? "ok" : "bad"}`}>
+      <div className={`integrity-hero ${verified ? "ok" : integrity.data || integrity.error ? "bad" : ""}`}>
         <div>
           <span className="hero-kicker">EVIDENCE INTEGRITY</span>
-          <h2>{verified ? "Chain verified" : status ? "Verification failed" : "No evidence"}</h2>
+          <h2>
+            {verified
+              ? "Chain verified"
+              : integrity.error
+                ? "Ledger disconnected"
+                : integrity.loading && !integrity.data
+                  ? "Checking evidence…"
+                  : status === "FAILED"
+                    ? "Verification failed"
+                    : "No evidence"}
+          </h2>
           <p className="mono">
             {integrity.data?.counts?.events ?? 0} events · {integrity.data?.counts?.checkpoints ?? 0} checkpoints ·{" "}
             {integrity.data?.counts?.anchor_entries ?? 0} anchor entries
@@ -106,9 +131,13 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
           )}
         </div>
         <div className="row-actions">
-          <StatusPill status={verified ? "verified" : status ? "failed" : "untested"} />
-          <button className="btn btn-ghost btn-xs" onClick={verifyNow}>Verify again</button>
-          <button className="btn btn-ghost btn-xs" onClick={() => api.download("/v1/ledger/export", "bastionloop-ledger.json")}>
+          <StatusPill
+            status={verified ? "verified" : integrity.error ? "disconnected" : status === "FAILED" ? "failed" : "untested"}
+          />
+          <button className="btn btn-ghost btn-xs" onClick={verifyNow} disabled={verifyBusy}>
+            {verifyBusy ? <Spinner label="Verifying" /> : "Verify again"}
+          </button>
+          <button className="btn btn-ghost btn-xs" onClick={() => void exportLedger()}>
             Export ledger
           </button>
         </div>
@@ -132,7 +161,7 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
               <button
                 key={mode.id}
                 className="btn btn-danger-ghost btn-xs"
-                disabled={Boolean(tamperBusy)}
+                disabled={Boolean(tamperBusy) || !integrity.data || Boolean(integrity.error)}
                 onClick={() => tamper(mode.id)}
               >
                 {tamperBusy === mode.id ? <Spinner label="Tampering" /> : mode.label}
@@ -179,6 +208,7 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
           <input
             ref={fileRef}
             type="file"
+            aria-label="Choose a PCF JSON file to verify"
             accept="application/json,.json"
             style={{ display: "none" }}
             onChange={(event) => {
@@ -186,12 +216,33 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
               if (file) void uploadPcf(file);
             }}
           />
-          <div className="dropzone" onClick={() => fileRef.current?.click()}>
+          <div
+            className="dropzone"
+            role="button"
+            tabIndex={0}
+            aria-label="Choose a PCF JSON file to verify"
+            onClick={() => fileRef.current?.click()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                fileRef.current?.click();
+              }
+            }}
+          >
             {uploadBusy ? <Spinner label="Verifying" /> : "Click to choose a PCF JSON file"}
           </div>
           {uploadResult && (
             <div className="upload-result">
-              <StatusPill status={uploadResult.status === "VERIFIED" ? "verified" : "failed"} label={uploadResult.status} />
+              <StatusPill
+                status={uploadResult.status === "VERIFIED" ? "verified" : uploadResult.status === "FAILED" ? "failed" : "untested"}
+                label={uploadResult.status ?? "UNKNOWN"}
+              />
+              {uploadResult.anchor_source && (
+                <div className="mono tiny muted">
+                  anchor source: {uploadResult.anchor_source} · independent:{" "}
+                  {uploadResult.independent_verification === true ? "yes" : uploadResult.independent_verification === false ? "no" : "unknown"}
+                </div>
+              )}
               {uploadResult.first_broken_link && (
                 <div className="mono danger">
                   first broken link: seq {uploadResult.first_broken_link.seq} ({uploadResult.first_broken_link.reason})
@@ -230,16 +281,18 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
       <Card
         title="Event timeline"
         subtitle="Metadata only: hashes, sizes, verdicts, latency. Raw payloads stay in tenant storage."
-        actions={
+          actions={
           <input
             className="input compact"
+            aria-label="Filter evidence events"
             placeholder="Filter events…"
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
         }
       >
-        {filtered.length === 0 && <Empty>No events match.</Empty>}
+        {events.loading && !events.data && <Loading label="Loading evidence timeline" />}
+        {!events.loading && filtered.length === 0 && <Empty>{filter ? "No events match the filter." : "No events yet."}</Empty>}
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -254,7 +307,19 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
             </thead>
             <tbody>
               {filtered.slice().reverse().map((event: any) => (
-                <tr key={event.event_id} onClick={() => setSelectedEvent(event)} className={selectedEvent?.seq === event.seq ? "selected" : ""}>
+                <tr
+                  key={event.event_id}
+                  onClick={() => setSelectedEvent(event)}
+                  onKeyDown={(keyEvent) => {
+                    if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+                      keyEvent.preventDefault();
+                      setSelectedEvent(event);
+                    }
+                  }}
+                  tabIndex={0}
+                  aria-label={`Inspect event ${event.seq} ${event.event_type}`}
+                  className={selectedEvent?.seq === event.seq ? "selected" : ""}
+                >
                   <td className="mono">{event.seq}</td>
                   <td className="mono tiny">{new Date(event.ts).toLocaleTimeString()}</td>
                   <td><span className="event-type">{event.event_type}</span></td>

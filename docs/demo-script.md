@@ -13,9 +13,12 @@ Open `http://127.0.0.1:5173`. Confirm the header says **LEDGER VERIFIED** and **
 If Docker is available:
 
 ```bash
+cp .env.example .env       # explicit development credentials only
 docker compose up --build -d
 # open http://localhost:8080
 ```
+
+Do not reuse `.env.example` for production; use `.env.production.example` and follow the production section in `docs/runbook.md`.
 
 Record a backup video before the event. Use the mock model on stage; keep `MOCK_LLM=1`-style determinism.
 
@@ -38,7 +41,7 @@ Point at the integrity banner and the evidence IDs under the numbers.
 
 1. Open **Findings**, select a finding, press **Inspect PCF**.
 2. Show commit-reveal, session ID, policy hash, checkpoint and anchor.
-3. Press **Verify in browser**. The page recomputes the signature, chain, Merkle root, both checkpoint signatures, the anchor chain and commit-reveal with WebCrypto — no server trust.
+3. Press **Verify in browser**. The page recomputes the signature, chain, Merkle root, both checkpoint signatures, the anchor chain and commit-reveal with WebCrypto — no Python verifier. It fetches the anchor entries separately from `/v1/anchor`; if that fetch is unavailable it labels the result **VERIFIED · EMBEDDED ANCHOR** instead of claiming independent anchoring.
 4. Press **Verify** again after editing one field in the JSON (or use the Audit tamper simulator). It fails, and the failing check is named.
 
 > “The Python verifier and the browser verifier are independent. If they disagree, the evidence is not trustworthy.”

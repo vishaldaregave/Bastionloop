@@ -112,6 +112,46 @@ function withoutSignatures(pcf: Record<string, unknown>): Record<string, unknown
   return copy;
 }
 
+const REQUIRED_PCF_PATHS = [
+  "pcf_version",
+  "finding_id",
+  "finding_type",
+  "severity",
+  "created_at",
+  "run.run_id",
+  "run.tenant_id",
+  "run.mode",
+  "attack.case_id",
+  "payload.commitment",
+  "payload.reveal",
+  "payload.payload_hash",
+  "model.session_id",
+  "model.response_hash",
+  "verdict.decision",
+  "policy.bundle_hash",
+  "policy.version",
+  "images",
+  "dlp",
+  "canary_scan",
+  "chain.seq",
+  "chain.event_id",
+  "chain.event_hash",
+  "ledger.events",
+  "ledger.checkpoints",
+  "trust.non_claims",
+];
+
+function pathValue(document: any, path: string): { value: any; present: boolean } {
+  let current = document;
+  for (const part of path.split(".")) {
+    if (!current || typeof current !== "object" || !(part in current)) {
+      return { value: undefined, present: false };
+    }
+    current = current[part];
+  }
+  return { value: current, present: true };
+}
+
 function signerPublicKey(pinned: PinnedKeys): Uint8Array | null {
   const key = pinned?.keys?.signer?.public_key_b64;
   if (!key) return null;
@@ -147,7 +187,14 @@ function recordForEvent(event: any) {
 export async function verifyPcfInBrowser(
   pcf: any,
   pinned: PinnedKeys,
-): Promise<{ ok: boolean; checks: Check[]; head: { seq: number; hash: string } | null }> {
+  externalAnchorEntries?: any[],
+): Promise<{
+  ok: boolean;
+  checks: Check[];
+  head: { seq: number; hash: string } | null;
+  independent: boolean;
+  anchorSource: "embedded" | "external" | "missing";
+}> {
   const checks: Check[] = [];
   const add = (id: string, label: string, status: CheckStatus, detail: string) => {
     checks.push({ id, label, status, detail });
@@ -159,28 +206,67 @@ export async function verifyPcfInBrowser(
 
   if (!signer || !signerPub) {
     add("pinned-keys", "Pinned public keys loaded", "fail", "No pinned signer key supplied.");
-    return { ok: false, checks, head: null };
+    return { ok: false, checks, head: null, independent: false, anchorSource: "missing" };
   }
   add("pinned-keys", "Pinned public keys loaded", "pass", `signer ${signer.key_id}`);
+
+  const missing = REQUIRED_PCF_PATHS.filter((path) => !pathValue(pcf, path).present);
+  add(
+    "schema",
+    "PCF required fields",
+    missing.length ? "fail" : "pass",
+    missing.length ? `Missing ${missing.join(", ")}` : "All required PCF fields are present",
+  );
+  const version = pathValue(pcf, "pcf_version");
+  add(
+    "version",
+    "PCF format version",
+    version.present && version.value === "1.0" ? "pass" : "fail",
+    version.present ? String(version.value) : "Missing pcf_version",
+  );
 
   const signatureBlock = pcf?.signatures?.signer;
   if (!signatureBlock?.signature) {
     add("signature", "PCF signature", "fail", "Missing signatures.signer.signature");
   } else {
-    if (signatureBlock.key_id && signatureBlock.key_id !== signer.key_id) {
+    if (!signatureBlock.key_id) {
+      add("signature-key", "Signature key is pinned", "warn", "Signature has no key id.");
+    } else if (signatureBlock.key_id !== signer.key_id) {
       add("signature-key", "Signature key is pinned", "fail", `signed by ${signatureBlock.key_id}, pinned ${signer.key_id}`);
     } else {
       add("signature-key", "Signature key is pinned", "pass", signer.key_id);
     }
+    if (!signatureBlock.domain) {
+      add("signature-domain", "Signature domain separation", "warn", "Signature has no domain.");
+    } else {
+      add(
+        "signature-domain",
+        "Signature domain separation",
+        signatureBlock.domain === PCF_DOMAIN ? "pass" : "fail",
+        signatureBlock.domain === PCF_DOMAIN ? PCF_DOMAIN : `Unexpected domain ${signatureBlock.domain}`,
+      );
+    }
+    add(
+      "signature-algorithm",
+      "Signature algorithm",
+      !signatureBlock.algorithm ? "warn" : signatureBlock.algorithm === "ed25519" ? "pass" : "fail",
+      signatureBlock.algorithm ? String(signatureBlock.algorithm) : "Signature algorithm not declared",
+    );
     let payloadBytes: Uint8Array | null = null;
+    let payloadInvalid = false;
     if (signatureBlock.payload_b64) {
       try {
         payloadBytes = b64ToBytes(signatureBlock.payload_b64);
       } catch {
-        payloadBytes = null;
+        payloadInvalid = true;
       }
     }
-    if (!payloadBytes) {
+    if (payloadInvalid) {
+      add("signature-payload", "Exact signed bytes present", "fail", "Signed payload is not valid base64.");
+      payloadBytes = new TextEncoder().encode(
+        canonical({ ...withoutSignatures(pcf), domain: PCF_DOMAIN }),
+      );
+    } else if (!payloadBytes) {
       payloadBytes = new TextEncoder().encode(
         canonical({ ...withoutSignatures(pcf), domain: PCF_DOMAIN }),
       );
@@ -190,7 +276,7 @@ export async function verifyPcfInBrowser(
     }
     const valid = verifySignature(signatureBlock.signature, payloadBytes, signerPub);
     add("signature", "PCF signature", valid ? "pass" : "fail", valid ? "Ed25519 signature verifies" : "Signature does not verify");
-    if (valid && signatureBlock.payload_b64) {
+    if (valid && signatureBlock.payload_b64 && !payloadInvalid) {
       try {
         const payloadObject = JSON.parse(new TextDecoder().decode(payloadBytes));
         if (payloadObject && typeof payloadObject === "object" && "domain" in payloadObject) {
@@ -221,17 +307,44 @@ export async function verifyPcfInBrowser(
       recomputed === commitment ? "pass" : "fail",
       recomputed === commitment ? "Revealed payload matches commitment" : "Reveal does not match commitment",
     );
+    add(
+      "payload-hash",
+      "Payload hash",
+      pcf?.payload?.payload_hash === recomputed ? "pass" : "fail",
+      pcf?.payload?.payload_hash === recomputed ? "Payload hash matches the reveal" : "Payload hash does not match the reveal",
+    );
   }
 
   const ledger = pcf?.ledger;
-  const events = Array.isArray(ledger?.events)
-    ? [...ledger.events].sort((a: any, b: any) => Number(a.seq) - Number(b.seq))
-    : [];
+  const rawEvents: any[] = Array.isArray(ledger?.events) ? ledger.events : [];
+  const rawSeqs = rawEvents.map((event: any) => Number(event?.seq));
+  const sortedSeqs = [...rawSeqs].sort((a, b) => a - b);
+  add(
+    "event-order",
+    "Ledger events are ordered",
+    rawSeqs.length === sortedSeqs.length && rawSeqs.every((seq, index) => seq === sortedSeqs[index])
+      ? "pass"
+      : "fail",
+    rawSeqs.length === sortedSeqs.length && rawSeqs.every((seq, index) => seq === sortedSeqs[index])
+      ? "Ascending sequence order"
+      : "Events are out of sequence order",
+  );
+  const events = [...rawEvents].sort((a: any, b: any) => Number(a.seq) - Number(b.seq));
   const records = new Map<number, string>(
     Array.isArray(ledger?.canonical_records)
       ? ledger.canonical_records.map((entry: any) => [Number(entry.seq), String(entry.b64)])
       : [],
   );
+  const anchorEntries: any[] = Array.isArray(externalAnchorEntries)
+    ? externalAnchorEntries
+    : Array.isArray(ledger?.anchor_entries)
+      ? ledger.anchor_entries
+      : [];
+  const anchorSource: "embedded" | "external" | "missing" = Array.isArray(externalAnchorEntries)
+    ? "external"
+    : anchorEntries.length > 0
+      ? "embedded"
+      : "missing";
 
   if (events.length === 0) {
     add("chain", "Ledger hash chain", "fail", "No ledger events in the PCF.");
@@ -287,25 +400,31 @@ export async function verifyPcfInBrowser(
       broken ? broken : `${events.length} events re-hashed from genesis`,
     );
     if (!broken) {
-      const matchesHead =
-        Number(pcf?.chain?.seq) === Number(head.seq) && pcf?.chain?.event_hash === head.event_hash;
+      const chainSeq = Number(pcf?.chain?.seq);
+      const target = events.find((event: any) => Number(event.seq) === chainSeq);
+      const matches =
+        target &&
+        target.event_hash === pcf?.chain?.event_hash &&
+        target.event_id === pcf?.chain?.event_id &&
+        Number(head.seq) >= chainSeq;
       add(
         "chain-position",
-        "PCF points at the ledger head",
-        matchesHead ? "pass" : "fail",
-        matchesHead ? `seq ${head.seq}` : "PCF chain position does not match the proof",
+        "PCF points at a covered ledger event",
+        matches ? "pass" : "fail",
+        matches ? `seq ${chainSeq} (proof head ${head.seq})` : "PCF chain position does not match the proof",
       );
     }
-    const found = events.some(
+    const finding = events.find(
       (event: any) =>
         event.event_type === "finding.created" &&
         event.metadata?.finding_id === pcf?.finding_id,
     );
+    const findingMatches = finding && Number(finding.seq) === Number(pcf?.chain?.seq);
     add(
       "finding-event",
       "Finding event is in the chain",
-      found ? "pass" : "fail",
-      found ? String(pcf?.finding_id) : "No matching finding.created event",
+      findingMatches ? "pass" : "fail",
+      findingMatches ? String(pcf?.finding_id) : "No matching finding.created event at the PCF position",
     );
   }
 
@@ -313,6 +432,23 @@ export async function verifyPcfInBrowser(
   if (!checkpoint) {
     add("checkpoint", "Signed checkpoint", "fail", "No checkpoint in the ledger proof.");
   } else {
+    const requiredCheckpointFields = [
+      "counter",
+      "upto_seq",
+      "last_hash",
+      "merkle_root",
+      "checkpoint_hash",
+      "created_at",
+      "signer_sig",
+      "witness_sig",
+    ];
+    const missingCheckpoint = requiredCheckpointFields.filter((field) => checkpoint[field] === undefined);
+    add(
+      "checkpoint-schema",
+      "Checkpoint required fields",
+      missingCheckpoint.length ? "fail" : "pass",
+      missingCheckpoint.length ? `Missing ${missingCheckpoint.join(", ")}` : "All checkpoint fields are present",
+    );
     const core = {
       counter: checkpoint.counter,
       upto_seq: checkpoint.upto_seq,
@@ -328,6 +464,14 @@ export async function verifyPcfInBrowser(
       coreHash === checkpoint.checkpoint_hash ? `counter ${core.counter}` : "Checkpoint hash mismatch",
     );
     const covered = events.filter((event: any) => Number(event.seq) <= Number(checkpoint.upto_seq));
+    add(
+      "checkpoint-coverage",
+      "Checkpoint covers the claimed events",
+      covered.length === Number(checkpoint.upto_seq) ? "pass" : "fail",
+      covered.length === Number(checkpoint.upto_seq)
+        ? `${covered.length} events covered`
+        : `Checkpoint claims seq ${checkpoint.upto_seq} but only ${covered.length} events are present`,
+    );
     const root = await merkleRoot(covered.map((event: any) => event.event_hash));
     add(
       "checkpoint-merkle",
@@ -349,6 +493,16 @@ export async function verifyPcfInBrowser(
         checkpoint_hash: checkpoint.checkpoint_hash,
       }),
     );
+    add(
+      "checkpoint-signer-key",
+      "Checkpoint signer key is pinned",
+      !checkpoint.signer_key_id ? "warn" : checkpoint.signer_key_id === signer.key_id ? "pass" : "fail",
+      !checkpoint.signer_key_id
+        ? "Checkpoint has no signer key id"
+        : checkpoint.signer_key_id === signer.key_id
+          ? signer.key_id
+          : `signed by ${checkpoint.signer_key_id}, pinned ${signer.key_id}`,
+    );
     const signerOk = checkpoint.signer_sig
       ? verifySignature(checkpoint.signer_sig, signingBytes, signerPub)
       : false;
@@ -360,6 +514,16 @@ export async function verifyPcfInBrowser(
     );
     if (witness?.public_key_b64) {
       const witnessPub = b64ToBytes(witness.public_key_b64);
+      add(
+        "checkpoint-witness-key",
+        "Checkpoint witness key is pinned",
+        !checkpoint.witness_key_id ? "warn" : checkpoint.witness_key_id === witness.key_id ? "pass" : "fail",
+        !checkpoint.witness_key_id
+          ? "Checkpoint has no witness key id"
+          : checkpoint.witness_key_id === witness.key_id
+            ? witness.key_id
+            : `cosigned by ${checkpoint.witness_key_id}, pinned ${witness.key_id}`,
+      );
       const witnessOk = checkpoint.witness_sig
         ? verifySignature(checkpoint.witness_sig, signingBytes, witnessPub)
         : false;
@@ -373,12 +537,46 @@ export async function verifyPcfInBrowser(
       add("checkpoint-witness", "Checkpoint witness co-signature", "warn", "No pinned witness key.");
     }
 
-    const anchorEntries: any[] = Array.isArray(ledger?.anchor_entries) ? ledger.anchor_entries : [];
+    const chainCheckpoint = pcf?.chain?.checkpoint;
+    if (!chainCheckpoint) {
+      add("chain-checkpoint", "PCF chain checkpoint", "fail", "PCF chain has no checkpoint reference.");
+    } else {
+      const chainCheckpointOk =
+        chainCheckpoint.counter === checkpoint.counter &&
+        chainCheckpoint.checkpoint_hash === checkpoint.checkpoint_hash &&
+        chainCheckpoint.merkle_root === checkpoint.merkle_root;
+      add(
+        "chain-checkpoint",
+        "PCF chain checkpoint",
+        chainCheckpointOk ? "pass" : "fail",
+        chainCheckpointOk ? `counter ${checkpoint.counter}` : "PCF chain checkpoint does not match the ledger checkpoint",
+      );
+    }
+
+    add(
+      "anchor-source",
+      "Anchor source",
+      anchorSource === "external" ? "pass" : anchorSource === "embedded" ? "warn" : "fail",
+      anchorSource === "external"
+        ? "Anchor entries supplied independently of the PCF"
+        : anchorSource === "embedded"
+          ? "Anchor entries are embedded in the PCF; fetch them from the anchor service for independent verification"
+          : "No anchor entries available",
+    );
     if (anchorEntries.length === 0) {
       add("anchor", "External anchor", "fail", "No anchor entries in the proof.");
     } else {
+      const counters = anchorEntries.map((entry: any) => Number(entry.counter));
+      const ordered = counters.every((counter, index) => counter === index + 1);
+      add(
+        "anchor-order",
+        "Anchor entries are contiguous",
+        ordered ? "pass" : "fail",
+        ordered ? `${counters.length} contiguous entries` : `Unexpected anchor counters: ${counters.join(", ")}`,
+      );
       const genesis = await genesisHash();
       let prev = genesis;
+      let previousUpto = 0;
       let anchorBroken: string | null = null;
       for (const entry of anchorEntries) {
         const coreEntry = { ...entry };
@@ -387,6 +585,11 @@ export async function verifyPcfInBrowser(
           anchorBroken = `anchor chain break at ${entry.counter}`;
           break;
         }
+        if (Number(entry.upto_seq) <= previousUpto) {
+          anchorBroken = `anchor ${entry.counter} is stale at seq ${entry.upto_seq}`;
+          break;
+        }
+        previousUpto = Number(entry.upto_seq);
         const expected = await hashObject({ domain: ANCHOR_DOMAIN, ...coreEntry });
         if (expected !== entry.anchor_hash) {
           anchorBroken = `anchor hash mismatch at ${entry.counter}`;
@@ -404,12 +607,24 @@ export async function verifyPcfInBrowser(
       const matches =
         match &&
         match.checkpoint_hash === checkpoint.checkpoint_hash &&
-        match.merkle_root === checkpoint.merkle_root;
+        match.merkle_root === checkpoint.merkle_root &&
+        match.last_hash === checkpoint.last_hash;
       add(
         "anchor",
         "Checkpoint is externally anchored",
         matches ? "pass" : "fail",
         matches ? `anchor ${checkpoint.counter}` : "No matching anchor entry",
+      );
+      const pcfAnchor = pcf?.anchor?.entry;
+      const pcfAnchorOk =
+        pcfAnchor &&
+        pcfAnchor.checkpoint_hash === checkpoint.checkpoint_hash &&
+        pcfAnchor.merkle_root === checkpoint.merkle_root;
+      add(
+        "pcf-anchor",
+        "PCF anchor entry matches the checkpoint",
+        pcfAnchorOk ? "pass" : "fail",
+        pcfAnchorOk ? `anchor ${checkpoint.counter}` : "PCF anchor entry missing or mismatched",
       );
     }
   }
@@ -449,5 +664,5 @@ export async function verifyPcfInBrowser(
     ? { seq: Number(events[events.length - 1].seq), hash: events[events.length - 1].event_hash }
     : null;
   const ok = checks.every((check) => check.status !== "fail");
-  return { ok, checks, head };
+  return { ok, checks, head, independent: ok && anchorSource === "external", anchorSource };
 }

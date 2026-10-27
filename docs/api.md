@@ -1,6 +1,10 @@
 # API
 
-All tenant endpoints require `Authorization: Bearer <token>`. The admin token is configured by `BASTION_ADMIN_TOKEN` (default `dev-admin-token`). Tenant tokens are Ed25519 capability tokens issued by the control plane; they are short-lived, action-scoped and run-scoped.
+All tenant endpoints require `Authorization: Bearer <token>`. The admin token is configured by `BASTION_ADMIN_TOKEN` (development default `dev-admin-token`; production requires a unique 32+ character secret). Tenant tokens are Ed25519 capability tokens issued by the control plane; they are short-lived, action-scoped and run-scoped.
+
+Service-to-service calls that can sign, append, read the ledger, execute a model session, return Blue verdicts or export reports require `X-Bastion-Internal: <BASTION_INTERNAL_TOKEN>`. Internal network reachability is never sufficient authorization. Production also rejects demo credentials, local runtime, key generation, naive mode, the tamper simulator and the judge challenge.
+
+Errors from upstream services are returned as a generic `503 {"detail":"upstream service unavailable"}`; internal URLs and exception text are logged server-side, not returned to the caller.
 
 ## Tokens
 
@@ -65,17 +69,19 @@ Blue's rules are never returned to Red in hardened mode.
 
 `GET /v1/findings` lists released findings.
 
-`GET /v1/findings/{finding_id}?verify=true` returns the PCF and verification report.
+`GET /v1/findings/{finding_id}?verify=true` returns the PCF and verification report. The gateway supplies anchor entries fetched from the anchor service; the report distinguishes `anchor_source=external` (`independent_verification=true`) from `anchor_source=embedded` (`independent_verification=false`).
 
-`POST /v1/verify/pcf` `{"pcf":{...}}` verifies an uploaded PCF.
+`POST /v1/verify/pcf` `{"pcf":{...}}` verifies an uploaded PCF using the gateway's independent anchor fetch. It rejects mutated signed fields, malformed or missing required fields, wrong signature domain/algorithm, commit/reveal mismatches, chain-position mismatches, missing witness/checkpoint evidence, duplicate/stale/out-of-order checkpoints, and anchor mismatches. `GET /v1/ledger/verify` uses the same checks over the full export.
 
 `GET /v1/pinned-keys` returns public signer/witness/control keys and fingerprints. It is public by design; compare fingerprints out of band.
 
+`GET /v1/anchor` proxies the anchor service's public read-only entries so the browser verifier can check the anchor independently of the PCF. Anchor writes remain internal-only.
+
 ## Suite and reports
 
-`POST /v1/security-tests` `{"tests":["IAM-01"],"mode":null}` runs the suite. Every result is appended with an evidence ID.
+`POST /v1/security-tests` `{"tests":["IAM-01"],"mode":null}` runs the suite. Every result is appended with `evidence_id` (`ledger:<event_id>`), `evidence_seq`, `evidence_hash`, `limitations` and `test_kind`. `status` is one of `PASS`, `FAIL`, `ERROR`, `UNTESTED`; `ERROR` is a harness/timeout/service/evidence failure and is never counted as a pass. The document also records `model_adapter` and `model_testing_kind` (`deterministic-mock` or `real-model`).
 
-`GET /v1/suite/results` returns the latest grid.
+`GET /v1/suite/results` returns the latest grid and status legend. `GET /v1/report.json|html|pdf` requires the internal credential; the report separates `PASS`, `FAIL`, `ERROR`, `UNTESTED` and model-safety outcomes.
 
 `GET /v1/reports/trust.json`, `.pdf`, `.html` return the Trust Report.
 

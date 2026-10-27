@@ -5,7 +5,6 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from bastion_core import events as ev
@@ -93,10 +92,22 @@ class RunState:
             ],
             "case_count": len(self.cases),
             "decisions": decisions,
-            "findings": list(self.findings),
+            "findings": [
+                {
+                    "finding_id": finding.get("finding_id"),
+                    "finding_type": finding.get("finding_type"),
+                    "severity": finding.get("severity"),
+                    "case_id": finding.get("case_id"),
+                    "status": finding.get("status"),
+                    "chain_seq": finding.get("chain_seq"),
+                    "checkpoint": finding.get("checkpoint"),
+                    "anchor_ref": finding.get("anchor_ref"),
+                }
+                for finding in self.findings
+            ],
             "freshness": self.freshness,
             "canary_scan": self.canary_scan,
-            "error": self.error,
+            "error": "run failed" if self.error else None,
             "policy": self.policy,
             "latency": summarize(self.latency),
             "overhead": summarize(self.overhead),
@@ -108,12 +119,17 @@ class Runtime:
         self.settings = ensure_dirs(settings())
         if self.settings.allow_key_gen:
             ensure_keypair("control", self.settings.keys_dir, self.settings.pinned_dir)
-            ensure_keypair("signer", self.settings.keys_dir, self.settings.pinned_dir)
-            ensure_keypair("witness", self.settings.keys_dir, self.settings.pinned_dir)
-        self.control_key = load_private_key(self.settings.keys_dir / "control.pem")
-        self.control_pub = load_public_key(self.settings.pinned_dir / "control.pub")
+        try:
+            self.control_key = load_private_key(self.settings.keys_dir / "control.pem")
+            self.control_pub = load_public_key(self.settings.pinned_dir / "control.pub")
+        except Exception as exc:  # noqa: BLE001 - startup fail-closed
+            raise RuntimeError(
+                "control signing key is unavailable; provision keys or explicitly enable development key generation"
+            ) from exc
         self.control_key_id = key_id(self.control_pub)
         self.policy_bundle, self.policy_error = self._load_policy()
+        if self.settings.is_production and self.policy_bundle is None:
+            raise RuntimeError(self.policy_error or "policy bundle unavailable")
         self.mode = self.settings.mode if self.settings.allow_naive else "hardened"
         self.runs: dict[str, RunState] = {}
         self.lock = threading.RLock()
@@ -127,11 +143,13 @@ class Runtime:
         self.policy_counts: dict[str, int] = {}
         self.integrity_cache: tuple[float, dict[str, Any]] | None = None
         self.started_at = time.time()
-        self.gateway_image = os.environ.get("BASTION_GATEWAY_IMAGE_DIGEST", "sha256:dev-local-gateway")
+        self.gateway_image = self.settings.gateway_image_digest
         self.runtime_kind = self.settings.runtime
 
     def _load_policy(self) -> tuple[PolicyBundle | None, str | None]:
         try:
+            if not self.settings.policy_path.exists() and self.settings.is_production:
+                return None, "policy bundle missing"
             bundle = ensure_default_bundle(self.settings.policy_path)
         except Exception as exc:
             return None, f"policy bundle unavailable: {exc}"
@@ -208,18 +226,28 @@ class Runtime:
         if not force and self.integrity_cache and now - self.integrity_cache[0] < 3.0:
             return self.integrity_cache[1]
         try:
-            report = get_json(self.settings.service("notary") + "/v1/ledger/verify", "notary", timeout=30.0)
-        except ServiceError as exc:
+            report = get_json(
+                self.settings.service("notary") + "/v1/ledger/verify",
+                "notary",
+                timeout=30.0,
+                headers={"X-Bastion-Internal": self.settings.internal_token},
+            )
+        except ServiceError:
             report = {
                 "status": "FAILED",
                 "verified": False,
-                "issues": [{"code": "notary-unreachable", "severity": "fatal", "detail": str(exc)}],
+                "issues": [{"code": "notary-unreachable", "severity": "fatal", "detail": "notary unavailable"}],
             }
         self.integrity_cache = (now, report)
         return report
 
     def export(self) -> dict[str, Any]:
-        return get_json(self.settings.service("notary") + "/v1/ledger/export", "notary", timeout=30.0)
+        return get_json(
+            self.settings.service("notary") + "/v1/ledger/export",
+            "notary",
+            timeout=30.0,
+            headers={"X-Bastion-Internal": self.settings.internal_token},
+        )
 
     def create_checkpoint(self) -> dict[str, Any]:
         return post_json(
@@ -313,7 +341,9 @@ def capability_from_header(header: str, admin_token: str) -> Capability:
     token = header.removeprefix("Bearer ").strip()
     if not token:
         raise PermissionError("missing bearer token")
-    if admin_token and token == admin_token:
+    from bastion_core.service_auth import constant_time_equals
+
+    if admin_token and constant_time_equals(token, admin_token):
         return Capability("system", ("*",), None, "hardened", 0.0, float("inf"), "admin")
     return verify_token(token, load_public_key(settings().pinned_dir / "control.pub"))
 

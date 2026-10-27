@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from bastion_core.canonical import hash_object
 from bastion_core.config import ensure_dirs, settings
 from bastion_core.crypto import ensure_keypair, key_id, load_private_key, sign_bytes
+from bastion_core.service_auth import require_internal
 from bastion_core.signing import checkpoint_signing_input
 
 SERVICE = "witness"
@@ -32,27 +34,59 @@ class CheckpointRequest(BaseModel):
     checkpoint: dict[str, Any]
 
 
-def _last_counter() -> int:
+def _load_state() -> dict[str, Any]:
     if not STATE_PATH.exists():
-        return 0
+        return {"last_counter": 0, "last_upto_seq": 0, "last_checkpoint_hash": None}
     try:
-        return int(json.loads(STATE_PATH.read_text(encoding="utf-8")).get("last_counter", 0))
-    except (ValueError, KeyError):
-        return 0
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="witness state is corrupt; refusing to cosign until it is restored",
+        ) from exc
+    counter = state.get("last_counter") if isinstance(state, dict) else None
+    upto = state.get("last_upto_seq", 0) if isinstance(state, dict) else None
+    if isinstance(counter, int) and counter > 0 and "last_upto_seq" not in state:
+        raise HTTPException(
+            status_code=500,
+            detail="witness state predates stale-checkpoint protection; restore the signed state backup before cosigning",
+        )
+    if (
+        not isinstance(counter, int)
+        or isinstance(counter, bool)
+        or counter < 0
+        or not isinstance(upto, int)
+        or isinstance(upto, bool)
+        or upto < 0
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="witness state is invalid; refusing to cosign until it is restored",
+        )
+    return state
+
+
+def _last_counter() -> int:
+    return int(_load_state()["last_counter"])
 
 
 @app.get("/v1/health")
 def health() -> dict[str, Any]:
+    try:
+        state = _load_state()
+    except HTTPException as exc:
+        return {"status": "error", "service": SERVICE, "key_id": WITNESS_KEY_ID, "detail": exc.detail}
     return {
         "status": "ok",
         "service": SERVICE,
         "key_id": WITNESS_KEY_ID,
-        "last_witnessed_counter": _last_counter(),
+        "last_witnessed_counter": int(state["last_counter"]),
+        "last_witnessed_upto_seq": int(state.get("last_upto_seq", 0)),
     }
 
 
 @app.post("/v1/witness/checkpoint")
-def witness_checkpoint(request: CheckpointRequest) -> dict[str, Any]:
+def witness_checkpoint(request: CheckpointRequest, _: None = Depends(require_internal)) -> dict[str, Any]:
     checkpoint = request.checkpoint
     core = {
         "counter": checkpoint.get("counter"),
@@ -63,21 +97,52 @@ def witness_checkpoint(request: CheckpointRequest) -> dict[str, Any]:
     }
     if None in core.values():
         raise HTTPException(status_code=400, detail="checkpoint is missing required fields")
+    if (
+        not isinstance(core["counter"], int)
+        or isinstance(core["counter"], bool)
+        or core["counter"] < 1
+        or not isinstance(core["upto_seq"], int)
+        or isinstance(core["upto_seq"], bool)
+        or core["upto_seq"] < 1
+        or not isinstance(core["last_hash"], str)
+        or not isinstance(core["merkle_root"], str)
+        or not isinstance(core["created_at"], str)
+    ):
+        raise HTTPException(status_code=400, detail="checkpoint has invalid field types")
     if hash_object(core) != checkpoint.get("checkpoint_hash"):
         raise HTTPException(status_code=400, detail="checkpoint hash is not self-consistent")
     counter = int(checkpoint["counter"])
+    upto = int(checkpoint["upto_seq"])
     with _lock:
-        last = _last_counter()
+        state = _load_state()
+        last = int(state["last_counter"])
+        last_upto = int(state.get("last_upto_seq", 0))
         if counter <= last:
             raise HTTPException(
                 status_code=409,
                 detail=f"witness already cosigned counter {counter} (last {last}); refusing rollback",
             )
+        if upto <= last_upto:
+            raise HTTPException(
+                status_code=409,
+                detail=f"checkpoint {counter} covers seq {upto}, not newer than witnessed seq {last_upto}; refusing stale checkpoint",
+            )
         signature = sign_bytes(WITNESS_KEY, checkpoint_signing_input(checkpoint))
-        STATE_PATH.write_text(
-            json.dumps({"last_counter": counter, "last_checkpoint_hash": checkpoint["checkpoint_hash"]}, indent=2),
-            encoding="utf-8",
-        )
+        temporary = STATE_PATH.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "last_counter": counter,
+                        "last_upto_seq": upto,
+                        "last_checkpoint_hash": checkpoint["checkpoint_hash"],
+                    },
+                    indent=2,
+                )
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, STATE_PATH)
     return {
         "key_id": WITNESS_KEY_ID,
         "signature": signature,

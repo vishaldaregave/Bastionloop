@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import queue
 import time
-from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
@@ -21,19 +21,21 @@ from bastion_core.canonical import b64e, hash_object, sha256_hex, utcnow
 from bastion_core.crypto import key_id, load_public_key
 from bastion_core.http import ServiceError, get_json
 from bastion_core.ledger import GENESIS_HASH, event_hash as compute_event_hash
+from bastion_core.service_auth import constant_time_equals
 from bastion_core.tokens import Capability, TokenError
 from bastion_core.verify import verify_export, verify_pcf
 
 from . import orchestrator
 from .runtime import capability_from_header, resolve_tenant, runtime
 
+logger = logging.getLogger("bastionloop.gateway")
 rt = runtime()
 app = FastAPI(title="BastionLoop gateway", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(rt.settings.cors_origins),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -102,9 +104,9 @@ def _cap(authorization: str = Header(default="")) -> Capability:
     try:
         return capability_from_header(authorization, rt.settings.admin_token)
     except (PermissionError, TokenError) as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise HTTPException(status_code=401, detail="unauthorized") from exc
     except Exception as exc:  # noqa: BLE001 - malformed tokens surface as 401
-        raise HTTPException(status_code=401, detail=f"invalid token: {exc}") from exc
+        raise HTTPException(status_code=401, detail="unauthorized") from exc
 
 
 def _require_action(cap: Capability, action: str, run_id: str | None = None) -> None:
@@ -163,7 +165,13 @@ def _owned(cap: Capability, run: Any) -> None:
 
 
 def _notary_endpoint(path: str, params: dict[str, Any] | None = None) -> Any:
-    return get_json(rt.settings.service("notary") + path, "notary", timeout=20.0, params=params)
+    return get_json(
+        rt.settings.service("notary") + path,
+        "notary",
+        timeout=20.0,
+        params=params,
+        headers={"X-Bastion-Internal": rt.settings.internal_token},
+    )
 
 
 @app.get("/v1/health")
@@ -172,15 +180,16 @@ def health() -> dict[str, Any]:
     for name in ("notary", "signer", "witness", "anchor", "model", "blue"):
         try:
             services[name] = get_json(rt.settings.service(name) + "/v1/health", name, timeout=0.4)
-        except ServiceError as exc:
-            services[name] = {"status": "unavailable", "detail": str(exc)}
+        except ServiceError:
+            services[name] = {"status": "unavailable"}
     return {
         "status": "ok",
         "service": "gateway",
+        "environment": rt.settings.environment,
         "mode": rt.mode,
         "runtime": rt.runtime_kind,
         "policy": {"hash": rt.policy_hash, "version": rt.policy_version},
-        "policy_error": rt.policy_error,
+        "policy_error": None if rt.settings.is_production else rt.policy_error,
         "gateway_image": rt.gateway_image,
         "runs": len(rt.runs),
         "services": services,
@@ -190,7 +199,7 @@ def health() -> dict[str, Any]:
 @app.post("/v1/tokens")
 def issue_token_endpoint(request: TokenRequest, authorization: str = Header(default="")) -> dict[str, Any]:
     token = authorization.removeprefix("Bearer ").strip()
-    if token != rt.settings.admin_token:
+    if not constant_time_equals(token, rt.settings.admin_token):
         raise HTTPException(status_code=403, detail="admin bearer token required")
     capability = rt.issue(request.tenant_id, request.actions, request.run_id, request.ttl_seconds)
     rt.append(
@@ -332,8 +341,8 @@ def events(
     _authorize(cap, "events:read")
     payload = _notary_endpoint("/v1/events", {"since": since, "limit": limit})
     items = payload.get("events", [])
-    if cap.tenant_id not in {"system", "suite", "blue"}:
-        items = [e for e in items if e.get("tenant_id") in {cap.tenant_id, "system"}]
+    if cap.tenant_id not in {"system", "suite"}:
+        items = [e for e in items if e.get("tenant_id") == cap.tenant_id]
     if run_id:
         items = [e for e in items if e.get("run_id") == run_id]
     return {"events": items, "count": len(items), "viewer": cap.tenant_id}
@@ -362,7 +371,10 @@ def _disk_findings() -> list[dict[str, Any]]:
                 "run_id": run.get("run_id"),
                 "tenant_id": run.get("tenant_id"),
                 "mode": run.get("mode"),
-                "path": str(path),
+                "model_id": run.get("model_id"),
+                "adapter": run.get("adapter"),
+                "benchmark_id": run.get("benchmark_id"),
+                "benchmark_version": run.get("benchmark_version"),
             }
         )
     return items
@@ -376,6 +388,28 @@ def findings(authorization: str = Header(default="")) -> dict[str, Any]:
     if cap.tenant_id not in {"system", "blue", "suite"}:
         items = [item for item in items if item.get("tenant_id") == cap.tenant_id]
     return {"findings": items, "count": len(items)}
+
+
+@app.get("/v1/anchor")
+def public_anchor_entries() -> dict[str, Any]:
+    try:
+        return get_json(
+            rt.settings.service("anchor") + "/v1/anchor",
+            "anchor",
+            timeout=5.0,
+        )
+    except ServiceError as exc:
+        raise HTTPException(status_code=503, detail="anchor unavailable") from exc
+
+
+def _external_anchor_entries() -> list[dict[str, Any]] | None:
+    try:
+        export = rt.export()
+    except Exception as exc:
+        logger.warning("external anchor unavailable during verification: %s", type(exc).__name__)
+        return None
+    entries = export.get("anchor_entries")
+    return entries if isinstance(entries, list) else None
 
 
 @app.get("/v1/findings/{finding_id}")
@@ -392,7 +426,9 @@ def finding(finding_id: str, verify: bool = True, authorization: str = Header(de
         _deny(cap, "findings:read", document.get("run", {}).get("run_id"), "cross-tenant-finding", tenant)
     response: dict[str, Any] = {"pcf": document, "verification": None}
     if verify:
-        response["verification"] = verify_pcf(document, rt.settings.pinned_dir)
+        response["verification"] = verify_pcf(
+            document, rt.settings.pinned_dir, _external_anchor_entries()
+        )
     return response
 
 
@@ -431,10 +467,12 @@ def pinned_keys() -> dict[str, Any]:
 def lab_blue(run_id: str | None = None, authorization: str = Header(default="")) -> dict[str, Any]:
     cap = _cap(authorization)
     _authorize(cap, "labs:read")
+    if cap.tenant_id not in {"system", "suite"}:
+        _deny(cap, "labs:read", None, "blue-lab-sealed")
     try:
         health = get_json(rt.settings.service("blue") + "/v1/health", "blue", timeout=3.0)
-    except ServiceError as exc:
-        health = {"status": "unavailable", "detail": str(exc)}
+    except ServiceError:
+        health = {"status": "unavailable"}
     runs = rt.public_runs()
     if run_id:
         runs = [r for r in runs if r["run_id"] == run_id]
@@ -464,6 +502,8 @@ def judge_session(request: JudgeRequest, authorization: str = Header(default="")
     cap = _cap(authorization)
     if cap.tenant_id != "system":
         _deny(cap, "admin:judge", None, "admin-only")
+    if not rt.settings.allow_judge:
+        raise HTTPException(status_code=403, detail="judge challenge is disabled")
     try:
         run = orchestrator.create_run(rt, "red", request.benchmark_id, request.mode, request.max_cases)
         orchestrator.start_run(rt, run, synchronous=True)
@@ -511,7 +551,7 @@ def verify_pcf_endpoint(request: VerifyPcfRequest, authorization: str = Header(d
     tenant = request.pcf.get("run", {}).get("tenant_id")
     if cap.tenant_id not in {"system", "blue", "suite"} and tenant != cap.tenant_id:
         _deny(cap, "findings:read", request.pcf.get("run", {}).get("run_id"), "cross-tenant-pcf", tenant)
-    return verify_pcf(request.pcf, rt.settings.pinned_dir)
+    return verify_pcf(request.pcf, rt.settings.pinned_dir, _external_anchor_entries())
 
 
 @app.get("/v1/suite/results")
@@ -531,11 +571,16 @@ def trust_report_html(authorization: str = Header(default="")) -> HTMLResponse:
     try:
         import httpx
 
-        response = httpx.get(rt.settings.service("suite") + "/v1/report.html", timeout=120.0)
+        response = httpx.get(
+            rt.settings.service("suite") + "/v1/report.html",
+            timeout=120.0,
+            headers={"X-Bastion-Internal": rt.settings.internal_token},
+        )
         response.raise_for_status()
         return HTMLResponse(response.text)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"report unavailable: {exc}") from exc
+        logger.warning("trust report html unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="report unavailable") from exc
 
 
 @app.get("/v1/labs/blue/config")
@@ -555,6 +600,8 @@ def lab_files(
 ) -> dict[str, Any]:
     cap = _cap(authorization)
     _authorize(cap, "labs:read")
+    if tenant not in {"red", "blue"}:
+        raise HTTPException(status_code=404, detail="tenant not found")
     requested = (rt.settings.tenants_dir / tenant / path).resolve()
     allowed_root = rt.settings.tenants_dir.resolve()
     if allowed_root not in requested.parents:
@@ -613,7 +660,12 @@ def trust_report_json(authorization: str = Header(default="")) -> Any:
 
 
 def _notary_endpoint_any(url: str) -> Any:
-    return get_json(url, "suite", timeout=120.0)
+    return get_json(
+        url,
+        "suite",
+        timeout=120.0,
+        headers={"X-Bastion-Internal": rt.settings.internal_token},
+    )
 
 
 @app.get("/v1/reports/trust.pdf")
@@ -623,17 +675,22 @@ def trust_report_pdf(authorization: str = Header(default="")) -> Response:
     try:
         import httpx
 
-        response = httpx.get(rt.settings.service("suite") + "/v1/report.pdf", timeout=120.0)
+        response = httpx.get(
+            rt.settings.service("suite") + "/v1/report.pdf",
+            timeout=120.0,
+            headers={"X-Bastion-Internal": rt.settings.internal_token},
+        )
         response.raise_for_status()
         return Response(content=response.content, media_type="application/pdf")
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"report unavailable: {exc}") from exc
+        logger.warning("trust report pdf unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="report unavailable") from exc
 
 
 @app.get("/v1/dashboard/overview")
 def dashboard_overview(authorization: str = Header(default="")) -> dict[str, Any]:
     cap = _cap(authorization)
-    if cap.tenant_id not in {"system", "blue", "suite"}:
+    if cap.tenant_id not in {"system", "suite"}:
         _deny(cap, "admin:dashboard", None, "dashboard-access")
     runs = rt.public_runs()
     integrity = rt.verify()
@@ -668,7 +725,7 @@ def dashboard_overview(authorization: str = Header(default="")) -> dict[str, Any
 @app.get("/v1/dashboard/isolation")
 def dashboard_isolation(authorization: str = Header(default="")) -> dict[str, Any]:
     cap = _cap(authorization)
-    if cap.tenant_id not in {"system", "blue", "suite"}:
+    if cap.tenant_id not in {"system", "suite"}:
         _deny(cap, "admin:dashboard", None, "dashboard-access")
     events_payload = _notary_endpoint("/v1/events", {"limit": 1000})
     attempts = []
@@ -709,7 +766,7 @@ def dashboard_isolation(authorization: str = Header(default="")) -> dict[str, An
             {"from": "red", "to": "blue", "label": "direct network blocked"},
             {"from": "red", "to": "model", "label": "direct network blocked"},
             {"from": "blue", "to": "any", "label": "egress denied"},
-            {"from": "red", "to": "metadata", "label": "cloud metadata blocked"},
+            {"from": "red", "to": "metadata", "label": "metadata-shaped local target blocked"},
         ],
         "recent_attempts": attempts[-20:],
     }
@@ -742,7 +799,7 @@ def metrics_timing(authorization: str = Header(default="")) -> dict[str, Any]:
 
 @app.post("/v1/ledger/append")
 def ledger_append(request: AppendEventRequest, authorization: str = Header(default=""), x_bastion_internal: str = Header(default="")) -> dict[str, Any]:
-    if x_bastion_internal == rt.settings.internal_token:
+    if constant_time_equals(x_bastion_internal, rt.settings.internal_token):
         pass
     else:
         cap = _cap(authorization)
@@ -799,6 +856,8 @@ def tamper(request: TamperRequest, authorization: str = Header(default="")) -> d
     cap = _cap(authorization)
     if cap.tenant_id != "system":
         _deny(cap, "admin:tamper", None, "admin-only")
+    if not rt.settings.allow_tamper:
+        raise HTTPException(status_code=403, detail="tamper simulator is disabled")
     export = rt.export()
     before = verify_export(copy.deepcopy(export), rt.settings.pinned_dir, export.get("anchor_entries"), require_anchor=True)
     document = copy.deepcopy(export)
@@ -863,15 +922,22 @@ def tamper(request: TamperRequest, authorization: str = Header(default="")) -> d
 
 
 @app.get("/v1/stream")
-async def stream(request: Request, token: str = Query(default="")) -> StreamingResponse:
+async def stream(
+    request: Request,
+    token: str = Query(default=""),
+    authorization: str = Header(default=""),
+) -> StreamingResponse:
+    if rt.settings.is_production and token and not authorization:
+        raise HTTPException(status_code=401, detail="use the Authorization header for production streams")
+    credential = authorization or (f"Bearer {token}" if token else "")
     try:
-        cap = capability_from_header(f"Bearer {token}", rt.settings.admin_token)
-        if cap.tenant_id not in {"system", "blue", "suite"}:
+        cap = capability_from_header(credential, rt.settings.admin_token)
+        if cap.tenant_id not in {"system", "suite"}:
             raise HTTPException(status_code=403, detail="stream access denied")
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise HTTPException(status_code=401, detail="unauthorized") from exc
     subscriber = rt.subscribe()
 
     async def generator():
@@ -894,4 +960,5 @@ async def stream(request: Request, token: str = Query(default="")) -> StreamingR
 
 @app.exception_handler(ServiceError)
 def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
-    return JSONResponse(status_code=503, content={"detail": f"upstream {exc.service} unavailable: {exc}"})
+    logger.warning("upstream service failure on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=503, content={"detail": "upstream service unavailable"})

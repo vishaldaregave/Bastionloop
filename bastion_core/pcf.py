@@ -3,9 +3,82 @@ from __future__ import annotations
 from typing import Any
 
 from .canonical import b64e, canonical_json, hash_object, utcnow
-from .signing import pcf_signing_input
+from .signing import PCF_DOMAIN, pcf_signing_input
 
 PCF_VERSION = "1.0"
+
+_PCF_REQUIRED_PATHS = (
+    "pcf_version",
+    "finding_id",
+    "finding_type",
+    "severity",
+    "created_at",
+    "run.run_id",
+    "run.tenant_id",
+    "run.mode",
+    "attack.case_id",
+    "payload.commitment",
+    "payload.reveal",
+    "payload.payload_hash",
+    "model.session_id",
+    "model.response_hash",
+    "verdict.decision",
+    "policy.bundle_hash",
+    "policy.version",
+    "images",
+    "dlp",
+    "canary_scan",
+    "chain.seq",
+    "chain.event_id",
+    "chain.event_hash",
+    "ledger.events",
+    "ledger.checkpoints",
+    "trust.non_claims",
+)
+
+
+def _path_value(document: dict[str, Any], path: str) -> tuple[Any, bool]:
+    current: Any = document
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None, False
+        current = current[part]
+    return current, True
+
+
+def validate_pcf_document(pcf: Any, *, require_signature: bool = True) -> list[str]:
+    """Return precise schema defects without making any trust decision."""
+    if not isinstance(pcf, dict):
+        return ["document:not-an-object"]
+    issues: list[str] = []
+    required_paths = list(_PCF_REQUIRED_PATHS)
+    if require_signature:
+        required_paths.append("signatures.signer.signature")
+    for path in required_paths:
+        value, present = _path_value(pcf, path)
+        if not present:
+            issues.append(f"{path}:missing")
+        elif value is None:
+            issues.append(f"{path}:null")
+    version, present = _path_value(pcf, "pcf_version")
+    if present and version != PCF_VERSION:
+        issues.append(f"pcf_version:unsupported:{version}")
+    events, present = _path_value(pcf, "ledger.events")
+    if present and (not isinstance(events, list) or not events):
+        issues.append("ledger.events:empty")
+    checkpoints, present = _path_value(pcf, "ledger.checkpoints")
+    if present and (not isinstance(checkpoints, list) or not checkpoints):
+        issues.append("ledger.checkpoints:empty")
+    non_claims, present = _path_value(pcf, "trust.non_claims")
+    if present and (not isinstance(non_claims, list) or not non_claims):
+        issues.append("trust.non_claims:empty")
+    domain, present = _path_value(pcf, "signatures.signer.domain")
+    if present and domain != PCF_DOMAIN:
+        issues.append("signatures.signer.domain:wrong-domain")
+    algorithm, present = _path_value(pcf, "signatures.signer.algorithm")
+    if present and algorithm != "ed25519":
+        issues.append("signatures.signer.algorithm:unsupported")
+    return issues
 
 NON_CLAIMS = [
     "Protection from container escape through a host kernel exploit is not claimed.",

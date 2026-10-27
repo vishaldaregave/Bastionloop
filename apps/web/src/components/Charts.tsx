@@ -10,11 +10,12 @@ import {
 } from "recharts";
 
 const tooltipStyle = {
-  background: "#0b1220",
-  border: "1px solid #223247",
-  borderRadius: 10,
-  color: "#dbe7f5",
-  fontSize: 12,
+  background: "var(--surface)",
+  border: "1px solid var(--border)",
+  borderRadius: 5,
+  color: "var(--text)",
+  fontSize: 11,
+  boxShadow: "var(--shadow-menu)",
 };
 
 export function TimingChart({ timing }: { timing: any }) {
@@ -40,20 +41,13 @@ export function TimingChart({ timing }: { timing: any }) {
     <div className="chart" style={{ height: 250 }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} barGap={6} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
-          <CartesianGrid stroke="#162235" vertical={false} />
-          <XAxis dataKey="mode" stroke="#64748b" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-          <YAxis
-            stroke="#64748b"
-            tick={{ fontSize: 11 }}
-            tickLine={false}
-            axisLine={false}
-            unit="ms"
-            width={52}
-          />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(122,162,255,0.06)" }} />
-          <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-          <Bar dataKey="allow" name="allow verdict" fill="#5eead4" radius={[4, 4, 0, 0]} maxBarSize={42} />
-          <Bar dataKey="block" name="block verdict" fill="#f472b6" radius={[4, 4, 0, 0]} maxBarSize={42} />
+          <CartesianGrid stroke="var(--border)" vertical={false} />
+          <XAxis dataKey="mode" stroke="var(--muted)" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
+          <YAxis stroke="var(--muted)" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} unit="ms" width={46} />
+          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--accent-soft)" }} />
+          <Legend wrapperStyle={{ fontSize: 10, color: "var(--muted)" }} />
+          <Bar dataKey="allow" name="allow verdict" fill="var(--green)" radius={[3, 3, 0, 0]} maxBarSize={36} />
+          <Bar dataKey="block" name="block verdict" fill="var(--red)" radius={[3, 3, 0, 0]} maxBarSize={36} />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -72,13 +66,13 @@ export function OverheadChart({ overhead }: { overhead: any }) {
     <div className="chart" style={{ height: 220 }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
-          <CartesianGrid stroke="#162235" vertical={false} />
-          <XAxis dataKey="name" stroke="#64748b" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-          <YAxis stroke="#64748b" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} unit="ms" width={52} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(122,162,255,0.06)" }} />
-          <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-          <Bar dataKey="p50" name="p50" fill="#7aa2ff" radius={[4, 4, 0, 0]} maxBarSize={48} />
-          <Bar dataKey="p95" name="p95" fill="#a78bfa" radius={[4, 4, 0, 0]} maxBarSize={48} />
+          <CartesianGrid stroke="var(--border)" vertical={false} />
+          <XAxis dataKey="name" stroke="var(--muted)" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
+          <YAxis stroke="var(--muted)" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} unit="ms" width={46} />
+          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--accent-soft)" }} />
+          <Legend wrapperStyle={{ fontSize: 10, color: "var(--muted)" }} />
+          <Bar dataKey="p50" name="p50" fill="var(--accent)" radius={[3, 3, 0, 0]} maxBarSize={40} />
+          <Bar dataKey="p95" name="p95" fill="var(--violet)" radius={[3, 3, 0, 0]} maxBarSize={40} />
         </BarChart>
       </ResponsiveContainer>
     </div>

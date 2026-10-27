@@ -27,15 +27,13 @@ export function CanaryHeatmap({
     const leak = leaks.find((item) => item.source_channel === channel || item.leak_channel === channel);
     if (leak) return { status: "leak", detail: `${leak.source_channel} → ${leak.leak_channel}` };
     if (channel === "model_context") {
-      if (!freshness) return { status: "untested", detail: "no freshness probe" };
-      return freshness.clean
-        ? { status: "clean", detail: "session started clean" }
-        : { status: "leak", detail: "prior context retrieved" };
+      if (freshness?.clean === true) return { status: "clean", detail: "freshness probe clean" };
+      if (freshness?.clean === false) return { status: "leak", detail: "prior context retrieved" };
+      return { status: "untested", detail: "no freshness result" };
     }
     if (notExercised.includes(channel)) return { status: "untested", detail: "requires container namespaces" };
-    if (scanned.includes(channel) || planted.includes(channel)) {
-      return { status: "clean", detail: "scanned, no leak" };
-    }
+    if (scanned.includes(channel)) return { status: "clean", detail: "scanned, no leak" };
+    if (planted.includes(channel)) return { status: "untested", detail: "planted, not scanned" };
     return { status: "untested", detail: "not exercised" };
   }
 
@@ -57,17 +55,25 @@ export function CanaryHeatmap({
           </div>
         );
       })}
-      <div className={`heat-cell heat-wide ${mode === "naive" ? "heat-leak" : "heat-clean"}`}>
+      <div className={`heat-cell heat-wide ${scan?.clean === false ? "heat-leak" : scan ? "heat-clean" : "heat-untested"}`}>
         <div className="heat-top">
           <span className="heat-label">Scan verdict</span>
           <StatusPill
-            status={scan?.clean === false ? "fail" : scan ? "pass" : "untested"}
-            label={scan?.clean === false ? "LEAKS FOUND" : scan ? "NO LEAKS" : "NO SCAN"}
+            status={scan?.clean === false ? "fail" : scan?.clean === true ? (notExercised.length > 0 ? "warn" : "pass") : "untested"}
+            label={
+              scan?.clean === false
+                ? "LEAKS FOUND"
+                : scan?.clean === true
+                  ? notExercised.length > 0
+                    ? "PARTIAL — NOT ALL CHANNELS"
+                    : "CLEAN — SCANNED"
+                  : "NO SCAN"
+            }
           />
         </div>
         <span className="heat-detail">
           {scan
-            ? `${leaks.length} leaks · ${scanned.length} channels scanned · ${notExercised.length} not exercised`
+            ? `${leaks.length} leaks · ${scanned.length} channels scanned · ${notExercised.length} not exercised${mode === "naive" ? " · naive baseline" : ""}`
             : "Run a red-team case to produce a scan."}
         </span>
       </div>

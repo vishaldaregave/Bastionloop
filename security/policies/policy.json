@@ -1,20 +1,20 @@
 {
-  "version": "2026.10.26.1",
+  "version": "2026.10.26.2",
   "default": "deny",
   "rules": [
-    {"id": "tenant-reads-own-events", "effect": "allow", "actions": ["events:read"], "when": {"same_tenant": true}},
+    {"id": "tenant-reads-own-events", "effect": "allow", "actions": ["events:read"], "when": {"same_tenant": true, "tenant_in": ["red"]}},
     {"id": "tenant-reads-own-findings", "effect": "allow", "actions": ["findings:read"], "when": {"same_tenant": true}},
     {"id": "tenant-reads-own-runs", "effect": "allow", "actions": ["runs:read"], "when": {"same_tenant": true}},
     {"id": "tenant-creates-runs", "effect": "allow", "actions": ["runs:create", "runs:start"], "when": {"same_tenant": true}},
     {"id": "red-infers-in-own-run", "effect": "allow", "actions": ["infer"], "when": {"same_tenant": true, "run_scoped": true}},
     {"id": "tenant-commits-own-payload", "effect": "allow", "actions": ["payload:commit"], "when": {"same_tenant": true, "run_scoped": true}},
     {"id": "tenant-reveals-own-payload", "effect": "allow", "actions": ["payload:reveal"], "when": {"same_tenant": true, "run_scoped": true}},
-    {"id": "blue-reads-released-findings", "effect": "allow", "actions": ["findings:read", "events:read"], "when": {"tenant_in": ["blue", "system", "suite"]}},
+    {"id": "blue-reads-released-findings", "effect": "allow", "actions": ["findings:read"], "when": {"tenant_in": ["blue", "system", "suite"]}},
     {"id": "suite-runs-security-tests", "effect": "allow", "actions": ["security-tests:run", "ledger:append"], "when": {"tenant_in": ["suite", "system"]}},
     {"id": "gateway-appends-ledger", "effect": "allow", "actions": ["ledger:append", "ledger:verify"], "when": {"tenant_in": ["gateway", "system", "suite", "notary"]}},
     {"id": "system-administers", "effect": "allow", "actions": ["*"], "when": {"tenant_in": ["system"]}},
     {"id": "labs-read", "effect": "allow", "actions": ["labs:read"], "when": {"tenant_in": ["red", "blue", "system", "suite"]}},
-    {"id": "tenants-read-metrics", "effect": "allow", "actions": ["metrics:read", "health:read", "reports:read"], "when": {"tenant_in": ["system", "red", "blue", "suite"]}},
+    {"id": "operators-read-metrics-and-reports", "effect": "allow", "actions": ["metrics:read", "reports:read"], "when": {"tenant_in": ["system", "suite"]}},
     {"id": "deny-cross-tenant-events", "effect": "deny", "actions": ["events:read", "findings:read", "runs:read"], "when": {"same_tenant": false}},
     {"id": "deny-admin-for-tenants", "effect": "deny", "actions": ["admin:*", "ledger:append"], "when": {"tenant_in": ["red", "blue"]}}
   ]

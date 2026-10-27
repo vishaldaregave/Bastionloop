@@ -3,13 +3,17 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from bastion_core import blue
+from bastion_core.service_auth import require_internal
 
 SERVICE = "blue"
-INTERNAL_TOKEN = os.environ.get("BASTION_INTERNAL_TOKEN", "dev-internal-token")
+# Controlled local negative controls only; never a public Internet or cloud
+# metadata endpoint.
+PROBE_EGRESS_URL = os.environ.get("BASTION_PROBE_EGRESS_URL", "http://127.0.0.1:9/")
+PROBE_DNS_NAME = os.environ.get("BASTION_PROBE_DNS_NAME", "bastionloop-egress.invalid")
 
 app = FastAPI(title="BastionLoop blue cell")
 
@@ -18,11 +22,6 @@ class VerdictRequest(BaseModel):
     prompt: str = Field(max_length=20000)
     response: str = Field(default="", max_length=50000)
     canaries: list[str] = []
-
-
-def _require_internal(x_bastion_internal: str = Header(default="")) -> None:
-    if x_bastion_internal != INTERNAL_TOKEN:
-        raise HTTPException(status_code=403, detail="blue cell accepts gateway calls only")
 
 
 @app.get("/v1/health")
@@ -37,15 +36,13 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/v1/verdict")
-def verdict(request: VerdictRequest, x_bastion_internal: str = Header(default="")) -> dict[str, Any]:
-    _require_internal(x_bastion_internal)
+def verdict(request: VerdictRequest, _: None = Depends(require_internal)) -> dict[str, Any]:
     result = blue.evaluate(request.prompt, request.response, request.canaries)
     return result.full()
 
 
 @app.get("/v1/config")
-def config(x_bastion_internal: str = Header(default="")) -> dict[str, Any]:
-    _require_internal(x_bastion_internal)
+def config(_: None = Depends(require_internal)) -> dict[str, Any]:
     return blue.public_config()
 
 
@@ -55,28 +52,35 @@ class ProbeRequest(BaseModel):
 
 
 @app.post("/v1/probe")
-def probe(request: ProbeRequest, x_bastion_internal: str = Header(default="")) -> dict[str, Any]:
-    _require_internal(x_bastion_internal)
+def probe(request: ProbeRequest, _: None = Depends(require_internal)) -> dict[str, Any]:
     import socket
 
     import httpx
 
     if request.probe == "egress":
-        targets = ["https://example.com", "http://169.254.169.254/latest/meta-data/"]
-        outcomes = []
-        for target in targets:
-            try:
-                response = httpx.get(target, timeout=2.0)
-                outcomes.append({"target": target, "allowed": True, "status": response.status_code})
-            except httpx.HTTPError as exc:
-                outcomes.append({"target": target, "allowed": False, "error": type(exc).__name__})
-        return {"probe": "egress", "allowed": any(o["allowed"] for o in outcomes), "outcomes": outcomes}
+        try:
+            response = httpx.get(PROBE_EGRESS_URL, timeout=2.0)
+            return {
+                "probe": "egress",
+                "allowed": True,
+                "target": PROBE_EGRESS_URL,
+                "status": response.status_code,
+                "controlled": True,
+            }
+        except httpx.HTTPError as exc:
+            return {
+                "probe": "egress",
+                "allowed": False,
+                "target": PROBE_EGRESS_URL,
+                "detail": type(exc).__name__,
+                "controlled": True,
+            }
     if request.probe == "dns":
         try:
-            socket.getaddrinfo("example.com", 443)
-            return {"probe": "dns", "allowed": True}
+            socket.getaddrinfo(PROBE_DNS_NAME, 443)
+            return {"probe": "dns", "allowed": True, "target": PROBE_DNS_NAME}
         except OSError as exc:
-            return {"probe": "dns", "allowed": False, "error": str(exc)}
+            return {"probe": "dns", "allowed": False, "target": PROBE_DNS_NAME, "detail": type(exc).__name__}
     if request.probe == "read":
         path = request.path or "/tenants/blue/canary.txt"
         try:

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from bastion_core.canonical import hash_object
 from bastion_core.config import ensure_dirs, settings
 from bastion_core.crypto import ensure_keypair, key_id, load_private_key, sign_bytes
+from bastion_core.pcf import validate_pcf_document
+from bastion_core.service_auth import require_internal
 from bastion_core.signing import checkpoint_signing_input, pcf_signing_input
 
 SERVICE = "signer"
@@ -36,7 +38,7 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/v1/sign/checkpoint")
-def sign_checkpoint(request: CheckpointRequest) -> dict[str, Any]:
+def sign_checkpoint(request: CheckpointRequest, _: None = Depends(require_internal)) -> dict[str, Any]:
     checkpoint = request.checkpoint
     core = {
         "counter": checkpoint.get("counter"),
@@ -47,6 +49,18 @@ def sign_checkpoint(request: CheckpointRequest) -> dict[str, Any]:
     }
     if None in core.values():
         raise HTTPException(status_code=400, detail="checkpoint is missing required fields")
+    if (
+        not isinstance(core["counter"], int)
+        or isinstance(core["counter"], bool)
+        or core["counter"] < 1
+        or not isinstance(core["upto_seq"], int)
+        or isinstance(core["upto_seq"], bool)
+        or core["upto_seq"] < 1
+        or not isinstance(core["last_hash"], str)
+        or not isinstance(core["merkle_root"], str)
+        or not isinstance(core["created_at"], str)
+    ):
+        raise HTTPException(status_code=400, detail="checkpoint has invalid field types")
     if hash_object(core) != checkpoint.get("checkpoint_hash"):
         raise HTTPException(status_code=400, detail="checkpoint hash is not self-consistent")
     signature = sign_bytes(SIGNER_KEY, checkpoint_signing_input(checkpoint))
@@ -59,10 +73,11 @@ def sign_checkpoint(request: CheckpointRequest) -> dict[str, Any]:
 
 
 @app.post("/v1/sign/pcf")
-def sign_pcf(request: PcfRequest) -> dict[str, Any]:
+def sign_pcf(request: PcfRequest, _: None = Depends(require_internal)) -> dict[str, Any]:
     pcf = request.pcf
-    if not pcf.get("finding_id") or not pcf.get("ledger") or not pcf.get("chain"):
-        raise HTTPException(status_code=400, detail="PCF must include finding_id, ledger and chain")
+    defects = validate_pcf_document(pcf, require_signature=False)
+    if defects:
+        raise HTTPException(status_code=400, detail={"message": "PCF failed required-field validation", "defects": defects})
     if pcf.get("signatures"):
         raise HTTPException(status_code=400, detail="refusing to sign a document that already has signatures")
     signature = sign_bytes(SIGNER_KEY, pcf_signing_input(pcf))

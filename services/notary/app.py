@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from bastion_core import events as ev
@@ -13,6 +12,7 @@ from bastion_core.config import ensure_dirs, settings
 from bastion_core.http import ServiceError, get_json, post_json
 from bastion_core.ledger import GENESIS_HASH, Ledger, build_checkpoint
 from bastion_core.merkle import merkle_root
+from bastion_core.service_auth import require_internal
 from bastion_core.verify import verify_export
 
 SERVICE = "notary"
@@ -31,9 +31,8 @@ class AppendRequest(BaseModel):
     policy_version: str | None = None
 
 
-def require_internal(x_bastion_internal: str = Header(default="")) -> None:
-    if x_bastion_internal != _s.internal_token:
-        raise HTTPException(status_code=401, detail="internal service token required")
+def _internal_headers() -> dict[str, str]:
+    return {"X-Bastion-Internal": _s.internal_token}
 
 
 def _append_events(data: dict[str, Any], tenant: str) -> dict[str, Any]:
@@ -48,7 +47,12 @@ def _append_events(data: dict[str, Any], tenant: str) -> dict[str, Any]:
 
 def _anchor_entries() -> list[dict[str, Any]] | None:
     try:
-        payload = get_json(_s.service("anchor") + "/v1/anchor", "anchor", timeout=5.0)
+        payload = get_json(
+            _s.service("anchor") + "/v1/anchor",
+            "anchor",
+            timeout=5.0,
+            headers=_internal_headers(),
+        )
         return payload.get("entries", [])
     except ServiceError:
         return None
@@ -68,6 +72,7 @@ def _anchor_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any] | None:
             },
             "anchor",
             timeout=10.0,
+            headers=_internal_headers(),
         )
     except ServiceError:
         return None
@@ -112,12 +117,14 @@ def create_checkpoint(force: bool = False) -> dict[str, Any]:
                 {"checkpoint": checkpoint},
                 "signer",
                 timeout=10.0,
+                headers=_internal_headers(),
             )
             witness = post_json(
                 _s.service("witness") + "/v1/witness/checkpoint",
                 {"checkpoint": checkpoint},
                 "witness",
                 timeout=10.0,
+                headers=_internal_headers(),
             )
         except ServiceError as exc:
             raise HTTPException(status_code=502, detail=f"signing plane unavailable: {exc}") from exc
@@ -188,8 +195,7 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/v1/ledger/append")
-def append_event(request: AppendRequest, x_bastion_internal: str = Header(default="")) -> dict[str, Any]:
-    require_internal(x_bastion_internal)
+def append_event(request: AppendRequest, _: None = Depends(require_internal)) -> dict[str, Any]:
     data = request.model_dump()
     event = _append_events(data, request.tenant_id or "system")
     checkpoint = maybe_checkpoint()
@@ -197,29 +203,31 @@ def append_event(request: AppendRequest, x_bastion_internal: str = Header(defaul
 
 
 @app.post("/v1/checkpoints/create")
-def checkpoint_now(x_bastion_internal: str = Header(default="")) -> dict[str, Any]:
-    require_internal(x_bastion_internal)
+def checkpoint_now(_: None = Depends(require_internal)) -> dict[str, Any]:
     return create_checkpoint()
 
 
 @app.post("/v1/checkpoints/anchor")
-def anchor_now(x_bastion_internal: str = Header(default="")) -> dict[str, Any]:
-    require_internal(x_bastion_internal)
+def anchor_now(_: None = Depends(require_internal)) -> dict[str, Any]:
     return {"anchored": anchor_pending()}
 
 
 @app.get("/v1/checkpoints")
-def list_checkpoints() -> dict[str, Any]:
+def list_checkpoints(_: None = Depends(require_internal)) -> dict[str, Any]:
     return {"checkpoints": LEDGER.checkpoints()}
 
 
 @app.get("/v1/events")
-def list_events(since: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=5000)) -> dict[str, Any]:
+def list_events(
+    since: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=5000),
+    _: None = Depends(require_internal),
+) -> dict[str, Any]:
     return {"events": LEDGER.events(since=since, limit=limit)}
 
 
 @app.get("/v1/ledger/export")
-def export_ledger() -> dict[str, Any]:
+def export_ledger(_: None = Depends(require_internal)) -> dict[str, Any]:
     export = LEDGER.export()
     entries = _anchor_entries()
     export["anchor_entries"] = entries
@@ -228,7 +236,7 @@ def export_ledger() -> dict[str, Any]:
 
 
 @app.get("/v1/ledger/verify")
-def verify_ledger(require_anchor: bool = True) -> dict[str, Any]:
+def verify_ledger(require_anchor: bool = True, _: None = Depends(require_internal)) -> dict[str, Any]:
     export = LEDGER.export()
     entries = _anchor_entries()
     export["anchor_entries"] = entries
@@ -248,7 +256,7 @@ def verify_ledger(require_anchor: bool = True) -> dict[str, Any]:
 
 
 @app.get("/v1/metrics")
-def metrics() -> dict[str, Any]:
+def metrics(_: None = Depends(require_internal)) -> dict[str, Any]:
     rows = LEDGER.connection.execute(
         "SELECT event_type, COUNT(*) AS n FROM events GROUP BY event_type ORDER BY n DESC"
     ).fetchall()
@@ -256,5 +264,4 @@ def metrics() -> dict[str, Any]:
         "events_total": LEDGER.event_count(),
         "events_by_type": {r["event_type"]: int(r["n"]) for r in rows},
         "checkpoints_total": len(LEDGER.checkpoints()),
-        "ledger_path": str(Path(_s.data_dir / "ledger" / "events.db")),
     }

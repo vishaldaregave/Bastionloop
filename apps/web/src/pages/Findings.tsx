@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { usePolling } from "../hooks";
 import { PcfPanel } from "../components/PcfPanel";
-import { Card, Empty, ErrorBanner, SectionTitle, StatusPill } from "../components/UI";
+import { Card, Empty, ErrorBanner, Loading, SectionTitle, StatusPill } from "../components/UI";
 
 export function Findings({ navigate }: { navigate: (route: string) => void }) {
   const findings = usePolling(() => api.get<any>("/v1/findings"), 4000);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<any>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -15,9 +16,14 @@ export function Findings({ navigate }: { navigate: (route: string) => void }) {
   }, [findings.data, selected]);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selected) {
+      setDetail(null);
+      return;
+    }
     let cancelled = false;
     setError(null);
+    setDetail(null);
+    setDetailLoading(true);
     api
       .get<any>(`/v1/findings/${encodeURIComponent(selected)}?verify=true`)
       .then((document) => {
@@ -25,6 +31,9 @@ export function Findings({ navigate }: { navigate: (route: string) => void }) {
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
       });
     return () => {
       cancelled = true;
@@ -61,8 +70,9 @@ export function Findings({ navigate }: { navigate: (route: string) => void }) {
       )}
 
       <div className="findings-layout">
-        <Card title="All PCFs" subtitle={`${items.length} signed bundles`}>
-          {items.length === 0 && <Empty>No findings yet. Run a model-safety case or the naive baseline.</Empty>}
+        <Card title="All PCFs" subtitle={`${items.length} bundles · verification runs when selected`}>
+          {findings.loading && !findings.data && <Loading label="Loading findings" />}
+          {!findings.loading && items.length === 0 && <Empty>No findings yet. Run a model-safety case or the naive baseline.</Empty>}
           <div className="run-list">
             {items.map((finding: any) => (
               <button
@@ -77,7 +87,13 @@ export function Findings({ navigate }: { navigate: (route: string) => void }) {
                 <div className="run-meta">
                   <span>{finding.finding_type}</span>
                   <span className="mono">{finding.case_id}</span>
-                  <StatusPill status={finding.status === "signed" ? "verified" : "fail"} label={finding.status?.toUpperCase()} />
+                  <span className="mono">{finding.adapter ?? "adapter?"}/{finding.model_id ?? "model?"}</span>
+                  <span className="mono">{finding.benchmark_id ?? "benchmark?"} @ {finding.benchmark_version ?? "?"}</span>
+                  <span className="mono">seq:{finding.chain_seq ?? "?"} · cp:{finding.checkpoint ?? "?"} · anchor:{finding.anchor_ref ?? "?"}</span>
+                  <StatusPill
+                    status={finding.status === "signed" ? "pass" : finding.status === "failed" ? "fail" : "untested"}
+                    label={finding.status === "signed" ? "SIGNED" : finding.status?.toUpperCase() ?? "UNKNOWN"}
+                  />
                 </div>
               </button>
             ))}
@@ -95,6 +111,10 @@ export function Findings({ navigate }: { navigate: (route: string) => void }) {
                 navigate("verifier");
               }}
             />
+          ) : detailLoading ? (
+            <Card title="PCF inspector" subtitle="Verifying selected bundle">
+              <Loading label="Loading PCF and running verification" />
+            </Card>
           ) : (
             <Card title="PCF inspector" subtitle="Select a finding">
               <Empty>No PCF selected.</Empty>

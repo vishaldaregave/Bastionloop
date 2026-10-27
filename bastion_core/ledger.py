@@ -58,6 +58,13 @@ BEFORE DELETE ON checkpoints
 BEGIN
     SELECT RAISE(ABORT, 'append-only ledger: checkpoint DELETE denied');
 END;
+CREATE TRIGGER IF NOT EXISTS checkpoints_no_sensitive_update
+BEFORE UPDATE OF counter, upto_seq, last_hash, merkle_root, checkpoint_hash,
+    signer_key_id, signer_sig, witness_key_id, witness_sig, created_at
+ON checkpoints
+BEGIN
+    SELECT RAISE(ABORT, 'append-only ledger: signed checkpoint fields are immutable');
+END;
 """
 
 
@@ -237,7 +244,6 @@ class Ledger:
     def export(self) -> dict[str, Any]:
         return {
             "genesis_hash": self.meta("genesis_hash", GENESIS_HASH),
-            "db_path": str(self.db_path),
             "events": self.events(limit=10_000_000),
             "checkpoints": self.checkpoints(),
             "meta": {
@@ -254,6 +260,7 @@ class Ledger:
                 DROP TRIGGER IF EXISTS events_no_update;
                 DROP TRIGGER IF EXISTS events_no_delete;
                 DROP TRIGGER IF EXISTS checkpoints_no_delete;
+                DROP TRIGGER IF EXISTS checkpoints_no_sensitive_update;
                 """
             )
             self._conn.commit()

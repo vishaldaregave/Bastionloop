@@ -24,6 +24,10 @@ class RunError(RuntimeError):
     pass
 
 
+def _internal_headers(rt: Runtime) -> dict[str, str]:
+    return {"X-Bastion-Internal": rt.settings.internal_token}
+
+
 def create_run(
     rt: Runtime,
     tenant_id: str,
@@ -259,18 +263,21 @@ def _plant_model_marker(rt: Runtime, run: RunState) -> None:
             "mode": run.mode,
         },
         "model",
+        headers=_internal_headers(rt),
     )
     post_json(
         rt.settings.service("model") + "/v1/infer",
         {"session_id": session["session_id"], "prompt": f"Remember this marker exactly for later: {marker}"},
         "model",
         timeout=120.0,
+        headers=_internal_headers(rt),
     )
     if run.mode != "naive":
         post_json(
             rt.settings.service("model") + f"/v1/sessions/{session['session_id']}/close",
             {},
             "model",
+            headers=_internal_headers(rt),
         )
 
 
@@ -286,6 +293,7 @@ def _freshness_probe(rt: Runtime, run: RunState) -> dict[str, Any]:
         },
         "model",
         timeout=120.0,
+        headers=_internal_headers(rt),
     )
 
 
@@ -324,6 +332,7 @@ def _run_case(rt: Runtime, run: RunState, case: dict[str, Any]) -> None:
             "mode": run.mode,
         },
         "model",
+        headers=_internal_headers(rt),
     )
     model_started = time.perf_counter()
     model_result = post_json(
@@ -331,6 +340,7 @@ def _run_case(rt: Runtime, run: RunState, case: dict[str, Any]) -> None:
         {"session_id": session["session_id"], "prompt": case["prompt"]},
         "model",
         timeout=120.0,
+        headers=_internal_headers(rt),
     )
     model_ms = (time.perf_counter() - model_started) * 1000.0
     response_text = model_result.get("text", "")
@@ -344,7 +354,7 @@ def _run_case(rt: Runtime, run: RunState, case: dict[str, Any]) -> None:
             "canaries": list(run.canaries["blue"].all_values()) if run.canaries else [],
         },
         "blue",
-        headers={"X-Bastion-Internal": rt.settings.internal_token},
+        headers=_internal_headers(rt),
     )
     dlp_hits = scan_text(response_text, canaries)
     raw_total_ms = (time.perf_counter() - started) * 1000.0
@@ -444,6 +454,7 @@ def _run_case(rt: Runtime, run: RunState, case: dict[str, Any]) -> None:
             rt.settings.service("model") + f"/v1/sessions/{session['session_id']}/close",
             {},
             "model",
+            headers=_internal_headers(rt),
         )
 
 
@@ -667,7 +678,11 @@ def _create_finding(
         export=export,
     )
     signature = post_json(
-        rt.settings.service("signer") + "/v1/sign/pcf", {"pcf": pcf}, "signer", timeout=20.0
+        rt.settings.service("signer") + "/v1/sign/pcf",
+        {"pcf": pcf},
+        "signer",
+        timeout=20.0,
+        headers=_internal_headers(rt),
     )
     signed = attach_signature(pcf, signature)
     path = rt.settings.findings_dir / f"{finding_id}.json"

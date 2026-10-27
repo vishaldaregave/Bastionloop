@@ -13,6 +13,7 @@ POLICY = ROOT / "security" / "policies" / "policy.json"
 
 TENANT_SERVICES = ("model", "blue", "red")
 INTERNAL_NETWORKS = ("evidence", "rednet", "bluenet", "modelnet")
+KEY_VOLUMES = ("signer-keys", "witness-keys", "control-keys")
 
 
 def fail(message: str, errors: list[str]) -> None:
@@ -58,6 +59,46 @@ def main() -> int:
         if network not in (gateway.get("networks") or []):
             fail(f"gateway must attach to {network}", errors)
 
+    env = gateway.get("environment") or {}
+    required_markers = {
+        "BASTION_ENV": "${BASTION_ENV:?",
+        "BASTION_ADMIN_TOKEN": "${BASTION_ADMIN_TOKEN:?",
+        "BASTION_INTERNAL_TOKEN": "${BASTION_INTERNAL_TOKEN:?",
+    }
+    for name, marker in required_markers.items():
+        value = str(env.get(name, ""))
+        if not value.startswith(marker):
+            fail(f"{name} must be an explicit required Compose variable", errors)
+        if name in {"BASTION_ADMIN_TOKEN", "BASTION_INTERNAL_TOKEN"} and "dev-" in value:
+            fail(f"{name} must not default to a demo credential", errors)
+    for flag in ("BASTION_ALLOW_KEY_GEN", "BASTION_ALLOW_NAIVE", "BASTION_ALLOW_TAMPER", "BASTION_ALLOW_JUDGE"):
+        if str(env.get(flag, "")) != f"${{{flag}:-0}}":
+            fail(f"{flag} must default to 0 in Compose", errors)
+    if env.get("BASTION_CORS_ORIGINS") not in (None, "${BASTION_CORS_ORIGINS:-}"):
+        fail("BASTION_CORS_ORIGINS should default to empty (same-origin web)", errors)
+
+    def volumes_of(name: str) -> list[str]:
+        return [str(item) for item in (services[name].get("volumes") or [])]
+
+    if "signer-keys:/keys" not in volumes_of("signer"):
+        fail("signer must mount only signer-keys at /keys", errors)
+    if any(volume.startswith(("witness-keys", "control-keys")) for volume in volumes_of("signer")):
+        fail("signer must not mount witness or control private keys", errors)
+    if "witness-keys:/keys" not in volumes_of("witness"):
+        fail("witness must mount only witness-keys at /keys", errors)
+    if any(volume.startswith(("signer-keys", "control-keys")) for volume in volumes_of("witness")):
+        fail("witness must not mount signer or control private keys", errors)
+    if "control-keys:/keys" not in volumes_of("gateway"):
+        fail("gateway must mount only control-keys at /keys", errors)
+    if any(volume.startswith(("signer-keys", "witness-keys")) for volume in volumes_of("gateway")):
+        fail("gateway must not mount signer or witness private keys", errors)
+    for name in TENANT_SERVICES:
+        if volumes_of(name):
+            fail(f"{name} must not mount host/service volumes", errors)
+    for volume in KEY_VOLUMES:
+        if f"{volume}:" not in " ".join(volumes_of("init")):
+            fail(f"init must provision the {volume} volume", errors)
+
     if "rednet" not in (services["red"].get("networks") or []):
         fail("red must only reach the gateway through rednet", errors)
     if "bluenet" in (services["red"].get("networks") or []):
@@ -68,6 +109,11 @@ def main() -> int:
         fail("blue must not join the model network", errors)
     if "rednet" in (services["blue"].get("networks") or []):
         fail("blue must not join the Red network", errors)
+
+    raw_compose = COMPOSE.read_text(encoding="utf-8")
+    for demo_credential in ("dev-admin-token", "dev-internal-token"):
+        if demo_credential in raw_compose:
+            fail(f"compose.yaml must not contain the demo credential {demo_credential}", errors)
 
     if not SECCOMP.exists():
         fail("security/seccomp.json is missing", errors)
@@ -84,7 +130,10 @@ def main() -> int:
         for error in errors:
             print(f"  - {error}")
         return 1
-    print("Compose checks passed: internal tenant networks, minimal exposure, read-only tenants, caps dropped, seccomp wired.")
+    print(
+        "Compose checks passed: internal tenant networks, minimal exposure, read-only tenants, "
+        "caps dropped, seccomp wired, credentials required, signing keys separated."
+    )
     return 0
 
 

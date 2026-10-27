@@ -1,17 +1,19 @@
 import { useState } from "react";
 import { api } from "../api";
 import { usePolling } from "../hooks";
-import { Card, CodeBlock, CopyButton, Empty, ErrorBanner, SectionTitle, Spinner, StatusPill } from "../components/UI";
+import { Card, CodeBlock, CopyButton, Empty, ErrorBanner, Loading, SectionTitle, Spinner, StatusPill } from "../components/UI";
 
 export function Judge({ navigate }: { navigate: (route: string) => void }) {
   const isolation = usePolling(() => api.get<any>("/v1/dashboard/isolation"), 3000);
   const [busy, setBusy] = useState(false);
   const [session, setSession] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resetNote, setResetNote] = useState<string | null>(null);
 
   async function startChallenge() {
     setBusy(true);
     setError(null);
+    setResetNote(null);
     try {
       const result = await api.post<any>("/v1/judge/session", {
         benchmark_id: "jailbreakbench-subset.v1",
@@ -28,13 +30,22 @@ export function Judge({ navigate }: { navigate: (route: string) => void }) {
 
   const attempts = isolation.data?.recent_attempts ?? [];
 
+  function resetView() {
+    setSession(null);
+    setError(null);
+    setResetNote("Local challenge view reset. The ledger and any issued token are untouched.");
+  }
+
   return (
     <div className="page">
-      <SectionTitle hint="Turn the judge into the attacker. Give them a scoped Red shell and one goal: read Blue's private canary. Every denial becomes evidence.">
-        Judge challenge
+      <SectionTitle hint="A scoped Red shell, one goal, and a signed record of every attempt and denial.">
+        Judge Challenge
       </SectionTitle>
 
-      {error && <ErrorBanner message={error} />}
+      {(error || isolation.error) && (
+        <ErrorBanner message={error || isolation.error || ""} onRetry={isolation.refresh} />
+      )}
+      {resetNote && <div className="note-line">{resetNote}</div>}
 
       <div className="judge-hero">
         <div>
@@ -42,9 +53,9 @@ export function Judge({ navigate }: { navigate: (route: string) => void }) {
           <h1>“Try to break it. We'll sign your attempt.”</h1>
           <p>
             The challenge issues a Red capability token scoped to one run and a command to execute inside the Red
-            container. The judge attempts file reads, direct network paths, the metadata endpoint and a prompt
-            injection. The gateway records each denial. At the end, the run has findings and the audit trail contains
-            the judge's own attempt.
+            container. The judge attempts file reads, direct network paths, a controlled metadata-shaped local target
+            and a prompt injection. The gateway records each denial. At the end, the run has findings and the audit
+            trail contains the judge's own attempt.
           </p>
           <div className="row-actions">
             <button className="btn btn-primary" onClick={startChallenge} disabled={busy}>
@@ -63,9 +74,20 @@ export function Judge({ navigate }: { navigate: (route: string) => void }) {
 
       {session && (
         <Card
-          title={`Challenge run ${session.run.run_id}`}
-          subtitle={`${session.run.case_count} cases · ${session.run.mode} · token expires in ${Math.round(session.expires_in_seconds / 60)} minutes`}
-          actions={<StatusPill status={session.run.status} />}
+          title={`Challenge run ${session.run?.run_id ?? "unknown"}`}
+          subtitle={
+            session.run
+              ? `${session.run.case_count ?? "?"} cases · ${session.run.mode ?? "?"} · ${session.run.adapter ?? "adapter?"} · token expires in ${Math.round((session.expires_in_seconds ?? 0) / 60)} minutes`
+              : "Challenge state unavailable"
+          }
+          actions={
+            <div className="row-actions">
+              <StatusPill status={session.run?.status ?? "untested"} />
+              <button className="btn btn-ghost btn-xs" onClick={resetView}>
+                Reset view
+              </button>
+            </div>
+          }
         >
           <div className="judge-command">
             <div className="cmd-head">
@@ -94,7 +116,8 @@ export function Judge({ navigate }: { navigate: (route: string) => void }) {
 
       <div className="two-col">
         <Card title="Recent boundary attempts" subtitle="From the ledger, refreshed live">
-          {attempts.length === 0 && <Empty>No attempts recorded yet. Start the challenge and run the command.</Empty>}
+          {isolation.loading && !isolation.data && <Loading label="Loading boundary attempts" />}
+          {!isolation.loading && attempts.length === 0 && <Empty>No attempts recorded yet. Start the challenge and run the command.</Empty>}
           <div className="attempt-list">
             {attempts.slice(-12).reverse().map((attempt: any) => (
               <div key={attempt.seq} className="attempt">
@@ -112,7 +135,7 @@ export function Judge({ navigate }: { navigate: (route: string) => void }) {
           <ul className="clean-list">
             <li>No cross-tenant file read succeeds.</li>
             <li>No direct Red → Blue or Red → model connection succeeds.</li>
-            <li>No metadata or external DNS request succeeds.</li>
+            <li>No controlled metadata-shaped local target or reserved DNS name succeeds.</li>
             <li>No canary appears in the model response or egress.</li>
             <li>Every attempt has a ledger sequence number, so the judge can verify the arena logged it.</li>
           </ul>

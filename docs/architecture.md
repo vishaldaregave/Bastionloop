@@ -20,14 +20,16 @@ Red tenant ──scoped token──▶ Gateway ──▶ Model (per-session)
 |---|---|---|
 | `services/gateway` | Token verification, policy decision, run orchestration, DLP, padding, dashboard API, judge session | Single mediation point; small code surface |
 | `services/notary` | Sole ledger writer, hash chain, checkpoint creation, Merkle root | Holds no signing key |
-| `services/signer` | Ed25519 signing of checkpoints and PCFs | Key never enters a tenant container |
-| `services/witness` | Independent checkpoint co-signature, monotonic counter | Refuses rollback; separate network |
+| `services/signer` | Ed25519 signing of checkpoints and PCFs | Signer key volume only; never in a tenant container; internal credential required |
+| `services/witness` | Independent checkpoint co-signature, monotonic counter | Witness key volume only; refuses rollback; separate network; internal credential required |
 | `services/anchor` | Append-only checkpoint root store | Outside the notary database |
-| `services/challenge_suite` | Executes tests, writes evidence IDs, builds Trust Report | Trusted control plane |
+| `services/challenge_suite` | Executes tests, writes a ledger evidence reference for every result, builds Trust Report | Trusted control plane |
 | `workers/model` | Mock/Ollama adapter, one session per test | No direct tenant exposure |
 | `workers/blue` | Rule-based verdicts, no egress in Compose | Returns verdicts only |
 | `workers/red` | Probe server and judge challenge script | Untrusted; gateway-only route |
 | `apps/web` | Evidence console and browser verifier | No server trust for verification |
+
+Every sensitive service route (signer, witness, anchor writes, notary reads/writes, model sessions, Blue verdicts, Red probes and suite reports) requires the internal service credential in addition to any network placement. The gateway's tenant routes enforce capability tokens, policy, tenant ownership and run scope. Signing keys are split across separate volumes so the gateway cannot read the signer or witness private key.
 
 ## Run lifecycle
 
@@ -68,14 +70,15 @@ Each event stores:
 }
 ```
 
-Hash input is the canonical JSON of the record without `event_hash`, prefixed by the previous hex hash. SQLite triggers reject `UPDATE` and `DELETE`. The notary is the only writer. `checkpoints` cover all events up to a sequence, with a Merkle root over event hashes. Checkpoints are signed by the signer and cosigned by the witness. The anchor stores the checkpoint hash, Merkle root and last hash in a separate JSONL file with its own hash chain.
+Hash input is the canonical JSON of the record without `event_hash`, prefixed by the previous hex hash. SQLite triggers reject event `UPDATE`/`DELETE` and reject updates to signed checkpoint fields; only `anchor_ref` may be filled in after anchoring. The notary is the only writer. `checkpoints` cover all events up to a sequence, with a Merkle root over event hashes. Checkpoints are signed by the signer and cosigned by the witness. The anchor stores the checkpoint hash, Merkle root and last hash in a separate JSONL file with its own hash chain.
 
 ## Checkpoint and PCF signing
 
 - Checkpoint signing input: `{"domain":"bastionloop-checkpoint-v1","checkpoint":{counter,upto_seq,last_hash,merkle_root,created_at},"checkpoint_hash":...}`.
 - PCF signing input: canonical JSON of the PCF without `signatures`, plus `"domain":"bastionloop-pcf-v1"`.
-- The exact signed bytes are embedded as `signatures.signer.payload_b64`, so a browser can verify the signature without reproducing Python float formatting.
+- The exact signed bytes are embedded as `signatures.signer.payload_b64`, so a browser can verify the signature without reproducing Python float formatting. The verifier requires the embedded bytes to equal the canonical bytes of the current document; changing a signed field is rejected even if the attacker keeps the old signature.
 - The PCF ledger proof includes `canonical_records`: the exact canonical bytes for each event. A browser recomputes `SHA256(prev_hash || canonical_bytes)` and compares `event_hash`.
+- The signer validates the complete PCF schema before signing. The verifier validates required fields, signature domain/algorithm, payload commitment and payload hash, chain event ID/hash, run ID, finding ID, prompt/response/policy hashes, checkpoint reference and anchor entry.
 
 ## Naive mode
 
@@ -96,3 +99,20 @@ Two independent verifiers:
 2. **Browser** — `/verifier` page recomputes Ed25519 signatures, the hash chain, Merkle root, both checkpoint signatures, the anchor chain and the commit-reveal hash with WebCrypto/tweetnacl. It never calls the Python verifier.
 
 If they disagree, the evidence is not trustworthy.
+
+## Challenge-suite status model
+
+Every suite result records `test_id`, `expected`, `actual`, `status`, `evidence_id` (`ledger:<event_id>`), `evidence_seq`, `evidence_hash`, `limitations`, `test_kind` and, for model tests, `model_adapter`. `status` is exactly one of `PASS`, `FAIL`, `ERROR`, `UNTESTED`:
+
+- `PASS`: the tested control held on the tested path.
+- `FAIL`: the test executed and observed behavior that violated its expected outcome (including a model-safety outcome).
+- `ERROR`: a harness, timeout, service, or evidence-write failure prevented completion. It is never counted as a pass.
+- `UNTESTED`: a declared prerequisite is absent (Docker namespaces, cgroups, or insufficient samples); the result explains how to run it.
+
+`test_kind=deterministic-mock` distinguishes the mock adapter from `real-model`, which is stochastic and must not be presented as reproducible. Network probes use controlled local loopback/`.invalid` negative controls; they never target public Internet or real cloud metadata endpoints.
+
+Verification accepts a pinned signer/witness key only from the pinned directory or the pinned-keys file supplied out of band; a public key carried inside the PCF is ignored. Public keys and the external anchor are trust inputs, not evidence.
+
+An anchor supplied inside the PCF is checked for internal consistency but is reported as `anchor_source=embedded` / `independent_verification=false`. To make an independent anchor claim, pass `bastion verify --anchor <anchor-url>` or supply anchor entries fetched separately. Missing witness signatures, missing checkpoints and missing anchor evidence are fatal, not silently treated as a pass. Checkpoint counters must be contiguous and increasing, checkpoint `upto_seq` must increase, and duplicate or out-of-order checkpoints are rejected.
+
+The verifier detects rollback only up to the latest checkpoint recorded by the independent anchor. It cannot prove that the latest anchor entry is the newest one that exists, and it does not protect against a compromised host administrator, a stolen signer+witness key, or a compromised pinned-key distribution channel.

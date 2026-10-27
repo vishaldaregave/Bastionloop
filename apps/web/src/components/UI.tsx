@@ -5,6 +5,8 @@ export type Status =
   | "failed"
   | "pass"
   | "fail"
+  | "error"
+  | "disconnected"
   | "untested"
   | "recorded"
   | "running"
@@ -22,6 +24,8 @@ const LABELS: Record<Status, string> = {
   failed: "FAILED",
   pass: "PASS",
   fail: "FAIL",
+  error: "ERROR",
+  disconnected: "DISCONNECTED",
   untested: "UNTESTED",
   recorded: "RECORDED",
   running: "RUNNING",
@@ -79,13 +83,20 @@ export function EvidenceValue({
 }: {
   value: React.ReactNode;
   evidenceId?: string | null;
-  status?: "verified" | "unverified" | "untested";
+  status?: "verified" | "unverified" | "untested" | "disconnected";
   detail?: string;
 }) {
   if (status === "untested") {
     return (
       <span className="evidence-value untested" title={detail ?? "No executed test backs this value"}>
         UNTESTED
+      </span>
+    );
+  }
+  if (status === "disconnected") {
+    return (
+      <span className="evidence-value disconnected" title={detail ?? "The gateway did not answer; this value is unknown"}>
+        DISCONNECTED
       </span>
     );
   }
@@ -151,11 +162,19 @@ export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
-export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorBanner({
+  message,
+  onRetry,
+  title = "Gateway error",
+}: {
+  message: string;
+  onRetry?: () => void;
+  title?: string;
+}) {
   return (
-    <div className="error-banner">
+    <div className="error-banner" role="alert">
       <span>
-        <b>Gateway error.</b> {message}
+        <b>{title}.</b> {message}
       </span>
       {onRetry && (
         <button className="btn btn-ghost btn-xs" onClick={onRetry}>
@@ -168,9 +187,17 @@ export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: (
 
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return (
-    <span className="spinner">
+    <span className="spinner" role="status" aria-live="polite">
       <i /> {label}
     </span>
+  );
+}
+
+export function Loading({ label = "Loading evidence" }: { label?: string }) {
+  return (
+    <div className="loading-state">
+      <Spinner label={label} />
+    </div>
   );
 }
 
@@ -191,6 +218,7 @@ export function ModeSwitch({
         className={`mode-button ${mode === "hardened" ? "active" : ""}`}
         onClick={() => onChange("hardened")}
         disabled={busy}
+        aria-pressed={mode === "hardened"}
       >
         <span className="dot dot-green" />
         BastionLoop
@@ -199,6 +227,7 @@ export function ModeSwitch({
         className={`mode-button danger ${mode === "naive" ? "active" : ""}`}
         onClick={() => onChange("naive")}
         disabled={busy || !allowNaive}
+        aria-pressed={mode === "naive"}
         title={allowNaive ? "Deliberate unsafe baseline for comparison" : "Naive mode is disabled"}
       >
         <span className="dot dot-red" />

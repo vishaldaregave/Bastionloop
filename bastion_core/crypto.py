@@ -91,6 +91,12 @@ def verify_bytes(public_key: Ed25519PublicKey, data: bytes, signature: str) -> b
 
 
 def ensure_keypair(name: str, keys_dir: Path, pinned_dir: Path, force: bool = False) -> str:
+    keys_dir.mkdir(parents=True, exist_ok=True)
+    pinned_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(keys_dir, 0o700)
+    except OSError:
+        pass
     priv_path = keys_dir / f"{name}.pem"
     pub_path = pinned_dir / f"{name}.pub"
     if force or not priv_path.exists():

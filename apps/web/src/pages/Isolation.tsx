@@ -6,6 +6,7 @@ import { IsolationMap } from "../components/IsolationMap";
 import {
   Card,
   ErrorBanner,
+  Loading,
   ModeSwitch,
   SectionTitle,
   Spinner,
@@ -19,13 +20,14 @@ export function Isolation() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  const mode = overview.data?.mode ?? "hardened";
+  const mode = overview.data?.mode;
   const allRuns: any[] = runs.data?.runs ?? [];
   const hardened = allRuns.find((run) => run.mode === "hardened" && run.status === "complete");
   const naive = allRuns.find((run) => run.mode === "naive" && run.status === "complete");
   const attempts = isolation.data?.recent_attempts ?? [];
 
   async function changeMode(next: "hardened" | "naive") {
+    if (!mode) return;
     setBusy(true);
     setNote(null);
     try {
@@ -39,7 +41,7 @@ export function Isolation() {
     }
   }
 
-  async function runMode(runMode: "hardened" | "naive") {
+  async function runMode(runMode: "hardened" | "naive"): Promise<boolean> {
     setBusy(true);
     setNote(`Running six attacks in ${runMode} mode...`);
     try {
@@ -52,8 +54,10 @@ export function Isolation() {
       await api.post(`/v1/runs/${run.run_id}/start?sync=true`);
       await Promise.all([overview.refresh(), isolation.refresh(), runs.refresh()]);
       setNote(`${runMode} run ${run.run_id} complete.`);
+      return true;
     } catch (err) {
-      setNote(err instanceof Error ? err.message : String(err));
+      setNote(`${runMode} run failed: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -63,9 +67,9 @@ export function Isolation() {
     setBusy(true);
     try {
       setNote("Running the BastionLoop baseline...");
-      await runMode("hardened");
+      if (!(await runMode("hardened"))) return;
       setNote("Running the deliberate naive baseline...");
-      await runMode("naive");
+      if (!(await runMode("naive"))) return;
       setNote("Both baselines complete. Compare the two heatmaps.");
     } finally {
       setBusy(false);
@@ -74,12 +78,19 @@ export function Isolation() {
 
   return (
     <div className="page">
-      <SectionTitle hint="Isolation is not a claim on a slide. It is a set of executed boundary attempts, channel scans and a model freshness probe.">
-        Isolation map
+      <SectionTitle hint="Executed boundary attempts, channel scans and model freshness — with untested controls left untested.">
+        Isolation
       </SectionTitle>
 
-      {(overview.error || isolation.error) && (
-        <ErrorBanner message={overview.error || isolation.error || ""} onRetry={() => { void overview.refresh(); void isolation.refresh(); }} />
+      {(overview.error || isolation.error || runs.error) && (
+        <ErrorBanner
+          message={overview.error || isolation.error || runs.error || ""}
+          onRetry={() => {
+            void overview.refresh();
+            void isolation.refresh();
+            void runs.refresh();
+          }}
+        />
       )}
 
       <Card
@@ -87,14 +98,15 @@ export function Isolation() {
         subtitle="The same attack corpus runs in both modes. Only the evidence changes."
         actions={
           <div className="row-actions">
-            <ModeSwitch mode={mode} onChange={changeMode} busy={busy} />
-            <button className="btn btn-primary btn-xs" onClick={runComparison} disabled={busy}>
+            <ModeSwitch mode={mode ?? "hardened"} onChange={changeMode} busy={busy || !mode} />
+            <button className="btn btn-primary btn-xs" onClick={runComparison} disabled={busy || !mode}>
               {busy ? <Spinner label="Running" /> : "Run both baselines"}
             </button>
           </div>
         }
       >
         {note && <div className="note-line">{note}</div>}
+        {overview.loading && !overview.data && <Loading label="Loading run comparison" />}
         <div className="compare-grid">
           <div className="compare-col">
             <div className="compare-head">
@@ -105,7 +117,8 @@ export function Isolation() {
             {naive ? (
               <>
                 <div className="compare-meta mono">
-                  {naive.run_id} · {naive.case_count} cases · freshness {naive.freshness?.clean ? "clean" : "LEAK"}
+                  {naive.run_id} · {naive.case_count} cases · {naive.adapter ?? "adapter?"} · freshness{" "}
+                  {naive.freshness?.clean === true ? "clean" : naive.freshness?.clean === false ? "LEAK" : "unknown"}
                 </div>
                 <CanaryHeatmap scan={naive.canary_scan} freshness={naive.freshness} mode="naive" />
               </>
@@ -122,7 +135,8 @@ export function Isolation() {
             {hardened ? (
               <>
                 <div className="compare-meta mono">
-                  {hardened.run_id} · {hardened.case_count} cases · freshness {hardened.freshness?.clean ? "clean" : "LEAK"}
+                  {hardened.run_id} · {hardened.case_count} cases · {hardened.adapter ?? "adapter?"} · freshness{" "}
+                  {hardened.freshness?.clean === true ? "clean" : hardened.freshness?.clean === false ? "LEAK" : "unknown"}
                 </div>
                 <CanaryHeatmap scan={hardened.canary_scan} freshness={hardened.freshness} mode="hardened" />
               </>
@@ -133,8 +147,16 @@ export function Isolation() {
         </div>
       </Card>
 
-      <Card title="Boundary map" subtitle="Allowed and blocked paths, plus every recorded attempt">
-        <IsolationMap mode={mode} recentAttempts={attempts} />
+      <Card title="Boundary map" subtitle="Gateway-reported allowed/blocked paths, plus recorded attempts">
+        <IsolationMap
+          mode={mode}
+          zones={isolation.data?.zones ?? []}
+          allowedPaths={isolation.data?.allowed_paths ?? []}
+          blockedPaths={isolation.data?.blocked_paths ?? []}
+          recentAttempts={attempts}
+          loading={isolation.loading}
+          error={isolation.error}
+        />
       </Card>
 
       <div className="two-col">

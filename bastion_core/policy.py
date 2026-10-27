@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from .canonical import canonical_json, hash_object
 from .crypto import sign_bytes, verify_bytes
 
-POLICY_VERSION = "2026.10.26.1"
+POLICY_VERSION = "2026.10.26.2"
 
 DEFAULT_BUNDLE: dict[str, Any] = {
     "version": POLICY_VERSION,
@@ -23,7 +23,7 @@ DEFAULT_BUNDLE: dict[str, Any] = {
             "id": "tenant-reads-own-events",
             "effect": "allow",
             "actions": ["events:read"],
-            "when": {"same_tenant": True},
+            "when": {"same_tenant": True, "tenant_in": ["red"]},
         },
         {
             "id": "tenant-reads-own-findings",
@@ -64,7 +64,7 @@ DEFAULT_BUNDLE: dict[str, Any] = {
         {
             "id": "blue-reads-released-findings",
             "effect": "allow",
-            "actions": ["findings:read", "events:read"],
+            "actions": ["findings:read"],
             "when": {"tenant_in": ["blue", "system", "suite"]},
         },
         {
@@ -92,10 +92,10 @@ DEFAULT_BUNDLE: dict[str, Any] = {
             "when": {"tenant_in": ["red", "blue", "system", "suite"]},
         },
         {
-            "id": "tenants-read-metrics",
+            "id": "operators-read-metrics-and-reports",
             "effect": "allow",
-            "actions": ["metrics:read", "health:read", "reports:read"],
-            "when": {"tenant_in": ["system", "red", "blue", "suite"]},
+            "actions": ["metrics:read", "reports:read"],
+            "when": {"tenant_in": ["system", "suite"]},
         },
         {
             "id": "deny-cross-tenant-events",

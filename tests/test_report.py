@@ -29,6 +29,15 @@ def sample_report():
                 "status": "untested",
                 "detail": "requires Compose namespaces",
             },
+            {
+                "test_id": "SVC-01",
+                "name": "Service call",
+                "category": "access",
+                "expected": "test completes",
+                "actual": "timeout",
+                "status": "ERROR",
+                "detail": "service unavailable",
+            },
         ],
         "integrity": {"status": "VERIFIED", "chain": {"events_checked": 12}, "counts": {"checkpoints": 2, "anchor_entries": 2}},
         "findings": [{"finding_id": "finding_01", "finding_type": "model-leak", "severity": "high", "case_id": "JB-06"}],
@@ -43,9 +52,11 @@ def test_report_counts_and_text():
     report = sample_report()
     assert report["summary"]["passed"] == 1
     assert report["summary"]["untested"] == 1
+    assert report["summary"]["errors"] == 1
     assert report["summary"]["findings"] == 1
     text = render_text(report)
     assert "UNTESTED" in text
+    assert "ERROR SVC-01" in text
     assert "RESIDUAL RISK REGISTER" in text
     assert "NON-CLAIMS" in text
 

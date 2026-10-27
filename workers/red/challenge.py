@@ -71,17 +71,18 @@ def main(argv: list[str] | None = None) -> int:
             return {"allowed": False, "detail": type(exc).__name__}
 
     def metadata() -> dict[str, Any]:
+        target = os.environ.get("BASTION_PROBE_METADATA_URL", "http://127.0.0.1:9/latest/meta-data/")
         try:
-            response = httpx.get("http://169.254.169.254/latest/meta-data/", timeout=2.0)
-            return {"allowed": True, "status": response.status_code}
+            response = httpx.get(target, timeout=2.0)
+            return {"allowed": True, "status": response.status_code, "target": target, "controlled": True}
         except httpx.HTTPError as exc:
-            return {"allowed": False, "detail": type(exc).__name__}
+            return {"allowed": False, "detail": type(exc).__name__, "target": target, "controlled": True}
 
     if args.runtime == "docker":
         results.append(attempt("direct TCP to Blue", direct_blue))
         results.append(attempt("direct TCP to model", direct_model))
         results.append(attempt("read Blue volume path", read_blue_volume))
-        results.append(attempt("cloud metadata endpoint", metadata))
+        results.append(attempt("controlled metadata-shaped local negative control", metadata))
     else:
         print("[SKIPPED] direct TCP, hostile volume and metadata probes: local host network cannot attest container isolation.")
         print("          Run this inside Docker Compose for the full boundary test.")

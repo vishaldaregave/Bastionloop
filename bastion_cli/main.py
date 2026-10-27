@@ -32,6 +32,9 @@ def _print_issues(result: dict[str, Any]) -> None:
         if issue.get("severity") == "fatal" or issue.get("code") in {
             "uncheckpointed-tail",
             "anchor-unavailable",
+            "anchor-not-independent",
+            "anchor-source-embedded",
+            "pcf-anchor-not-independent",
         }:
             print(f"  - {issue.get('severity')}: {issue.get('code')} :: {issue.get('detail')}")
 
@@ -70,6 +73,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 f"checkpoints: {result['ledger']['counts']['checkpoints']}  "
                 f"anchor entries: {result['ledger']['counts']['anchor_entries']}"
             )
+        print(
+            f"  anchor: {result.get('anchor_source', 'missing')} "
+            f"({'independent' if result.get('independent_verification') else 'not independent'})"
+        )
         if result.get("first_broken_link"):
             broken = result["first_broken_link"]
             print(f"  first broken link: seq {broken.get('seq')} ({broken.get('reason')})")
@@ -91,16 +98,29 @@ def cmd_suite(args: argparse.Namespace) -> int:
     return 0 if document.get("summary", {}).get("fail", 0) == 0 else 1
 
 
+def _internal_headers() -> dict[str, str]:
+    return {"X-Bastion-Internal": _s().internal_token}
+
+
 def _save_report() -> tuple[Path, Path]:
     s = _s()
-    document = get_json(s.service("suite") + "/v1/report.json", "suite", timeout=120.0)
+    document = get_json(
+        s.service("suite") + "/v1/report.json",
+        "suite",
+        timeout=120.0,
+        headers=_internal_headers(),
+    )
     json_path = s.reports_dir / "trust-report.json"
     json_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
     pdf_path = s.reports_dir / "trust-report.pdf"
     try:
         import httpx
 
-        response = httpx.get(s.service("suite") + "/v1/report.pdf", timeout=120.0)
+        response = httpx.get(
+            s.service("suite") + "/v1/report.pdf",
+            timeout=120.0,
+            headers=_internal_headers(),
+        )
         if response.status_code == 200:
             pdf_path.write_bytes(response.content)
     except Exception:  # noqa: BLE001
@@ -143,6 +163,20 @@ def cmd_export_keys(args: argparse.Namespace) -> int:
         return 2
 
 
+def cmd_policy_sign(args: argparse.Namespace) -> int:
+    from bastion_core.crypto import load_private_key
+    from bastion_core.policy import PolicyBundle
+
+    s = _s()
+    bundle_path = Path(args.bundle) if args.bundle else s.policy_path
+    key_path = Path(args.key) if args.key else s.keys_dir / "control.pem"
+    bundle = PolicyBundle.load(bundle_path)
+    signature = bundle.write_signature(load_private_key(key_path))
+    print(f"signed {bundle_path} -> {bundle.signature_path}")
+    print(signature)
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     s = _s()
     print("BastionLoop demo")
@@ -179,7 +213,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
     if args.suite:
         document = _gw("/v1/security-tests", {"tests": ["IAM-01", "LLM-01", "LLM-03", "AUD-01", "MON-01"]})
         print("suite:", json.dumps(document.get("summary", {})))
-    report = get_json(s.service("suite") + "/v1/report.json", "suite", timeout=120.0)
+    report = get_json(
+        s.service("suite") + "/v1/report.json",
+        "suite",
+        timeout=120.0,
+        headers=_internal_headers(),
+    )
     print(f"trust report: passed={report['summary']['passed']} failed={report['summary']['failed']} untested={report['summary']['untested']}")
     ok = (
         run["status"] == "complete"
@@ -238,6 +277,13 @@ def build_parser() -> argparse.ArgumentParser:
     export_keys = sub.add_parser("export-pinned", help="export pinned public keys for the browser verifier")
     export_keys.add_argument("output", nargs="?")
     export_keys.set_defaults(func=cmd_export_keys)
+
+    policy = sub.add_parser("policy", help="policy bundle operations")
+    policy_sub = policy.add_subparsers(dest="policy_command", required=True)
+    policy_sign = policy_sub.add_parser("sign", help="sign a deployed policy bundle with the control key")
+    policy_sign.add_argument("--bundle")
+    policy_sign.add_argument("--key")
+    policy_sign.set_defaults(func=cmd_policy_sign)
 
     demo = sub.add_parser("demo", help="run the end-to-end demo against a running arena")
     demo.add_argument("--mode", default="hardened", choices=["hardened", "naive"])
