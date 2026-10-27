@@ -17,6 +17,9 @@ export type Status =
   | "allow"
   | "naive"
   | "hardened"
+  | "signed"
+  | "neutral"
+  | "checking"
   | "warn";
 
 const LABELS: Record<Status, string> = {
@@ -36,6 +39,9 @@ const LABELS: Record<Status, string> = {
   allow: "ALLOW",
   naive: "NAIVE",
   hardened: "HARDENED",
+  signed: "SIGNED",
+  neutral: "NEUTRAL",
+  checking: "CHECKING",
   warn: "WARN",
 };
 
@@ -221,7 +227,7 @@ export function ModeSwitch({
         aria-pressed={mode === "hardened"}
       >
         <span className="dot dot-green" />
-        BastionLoop
+        Hardened
       </button>
       <button
         className={`mode-button danger ${mode === "naive" ? "active" : ""}`}

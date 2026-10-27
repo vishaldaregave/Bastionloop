@@ -91,7 +91,7 @@ export function Findings({ navigate }: { navigate: (route: string) => void }) {
                   <span className="mono">{finding.benchmark_id ?? "benchmark?"} @ {finding.benchmark_version ?? "?"}</span>
                   <span className="mono">seq:{finding.chain_seq ?? "?"} · cp:{finding.checkpoint ?? "?"} · anchor:{finding.anchor_ref ?? "?"}</span>
                   <StatusPill
-                    status={finding.status === "signed" ? "pass" : finding.status === "failed" ? "fail" : "untested"}
+                    status={finding.status === "signed" ? "signed" : finding.status === "failed" ? "fail" : "untested"}
                     label={finding.status === "signed" ? "SIGNED" : finding.status?.toUpperCase() ?? "UNKNOWN"}
                   />
                 </div>

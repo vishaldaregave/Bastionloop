@@ -52,8 +52,8 @@ export function PcfPanel({
           </p>
         </div>
         <div className="pcf-actions">
-          <StatusPill status={pillStatus} label={status} />
-          <StatusPill status={modelAdapter === "mock" ? "untested" : modelAdapter ? "pass" : "warn"} label={modelKind} />
+          <StatusPill status={pillStatus} label={status === "VERIFIED" ? "EVIDENCE VERIFIED" : status} />
+          <StatusPill status={modelAdapter === "mock" ? "untested" : modelAdapter ? "neutral" : "warn"} label={modelKind} />
           {anchorSource && (
             <StatusPill
               status={independent ? "pass" : "warn"}
@@ -89,7 +89,7 @@ export function PcfPanel({
       <div className="pcf-grid">
         <div className="pcf-box">
           <h3>Verification</h3>
-          <Field label="Status" value={<StatusPill status={pillStatus} label={status} />} />
+          <Field label="Evidence status" value={<StatusPill status={pillStatus} label={status === "VERIFIED" ? "EVIDENCE VERIFIED" : status} />} />
           <Field label="Anchor source" value={anchorSource ?? "missing"} mono />
           <Field label="Independent anchor" value={independent === true ? "yes" : independent === false ? "no" : "unknown"} />
           <Field label="Anchor checked" value={verification?.anchor_checked === true ? "yes" : verification?.anchor_checked === false ? "no" : "unknown"} />

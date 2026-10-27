@@ -148,6 +148,7 @@ export function Verifier() {
             </div>
             <textarea
               className="textarea mono small"
+              aria-label="PCF JSON"
               rows={8}
               placeholder="…or paste the PCF JSON directly"
               value={pcfText}

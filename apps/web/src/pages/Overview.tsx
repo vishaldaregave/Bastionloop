@@ -8,7 +8,6 @@ import {
   Card,
   Empty,
   ErrorBanner,
-  EvidenceValue,
   Loading,
   ModeSwitch,
   SectionTitle,
@@ -35,21 +34,36 @@ export function Overview({ navigate }: { navigate: (route: string) => void }) {
   const data = overview.data;
   const integrity = data?.integrity;
   const verified = integrity?.status === "VERIFIED";
-  const evidenceStatus = !data
-    ? overview.error || health.error
-      ? "disconnected"
-      : "untested"
-    : verified
-      ? "verified"
-      : "unverified";
   const mode = data?.mode ?? health.data?.mode;
   const timing = data?.timing ?? {};
   const hardenedP = timing?.hardened?.distinguishability?.p_value;
   const runs = data?.runs?.recent ?? [];
-  const recentFindings = findings.data?.findings?.slice(0, 6) ?? [];
-  const services = health.data?.services ?? {};
-  const serviceCount = Object.keys(services).length;
-  const unavailable = Object.entries(services).filter(([, item]: [string, any]) => item?.status !== "ok");
+  const recentFindings = findings.data?.findings?.slice(0, 4) ?? [];
+  const allFindings = findings.data?.findings ?? [];
+  const attentionFindings = allFindings.filter((finding: any) => ["critical", "high"].includes(finding.severity)).length;
+  const modelAdapter = health.data?.services?.model?.adapter;
+  const modelId = health.data?.services?.model?.model_id;
+  const healthLoading = health.loading && !health.data;
+  const overviewLoading = overview.loading && !data;
+  const findingsLoading = findings.loading && !findings.data;
+  const ledgerStatus = verified
+    ? "verified"
+    : overview.error || health.error
+      ? "disconnected"
+      : overviewLoading
+        ? "checking"
+        : data
+          ? "failed"
+          : "untested";
+  const ledgerLabel = verified
+    ? "Verified"
+    : overview.error || health.error
+      ? "Disconnected"
+      : overviewLoading
+        ? "Checking"
+        : data
+          ? "Failed"
+          : "No evidence";
 
   async function changeMode(next: "hardened" | "naive") {
     if (!mode) return;
@@ -116,120 +130,160 @@ export function Overview({ navigate }: { navigate: (route: string) => void }) {
       )}
       {note && <div className="inline-note">{note}</div>}
 
+      <div className="page-context" aria-label="Runtime context">
+        <span className="context-group">
+          <span className="context-label">Environment</span>
+          <span className="context-value mono">{healthLoading ? "checking" : health.data?.environment ?? "unknown"}</span>
+        </span>
+        <span className="context-group">
+          <span className="context-label">Mode</span>
+          {healthLoading ? (
+            <StatusPill status="checking" label="checking" />
+          ) : mode ? (
+            <StatusPill status={mode} label={mode} />
+          ) : (
+            <StatusPill status="untested" label="unknown" />
+          )}
+        </span>
+        <span className="context-group">
+          <span className="context-label">Model adapter</span>
+          <StatusPill
+            status={healthLoading ? "checking" : modelAdapter === "mock" ? "untested" : modelAdapter ? "neutral" : "warn"}
+            label={healthLoading ? "checking" : modelAdapter ?? "unknown"}
+          />
+          <span className="context-value mono">{healthLoading ? "checking model id" : modelId ?? "model id unknown"}</span>
+        </span>
+        <span className="context-group">
+          <span className="context-label">Policy</span>
+          <span className="context-value mono">{healthLoading ? "checking" : health.data?.policy?.version ?? "unknown"}</span>
+        </span>
+      </div>
+
       <div className="summary-strip">
         <div className="summary-item">
           <span className="summary-label">Ledger</span>
           <div className="summary-value">
-            <StatusPill
-              status={verified ? "verified" : overview.error || health.error ? "disconnected" : data ? "failed" : "untested"}
-              label={verified ? "Verified" : overview.error || health.error ? "Disconnected" : data ? "Failed" : "No evidence"}
-            />
+            <StatusPill status={ledgerStatus} label={ledgerLabel} />
           </div>
           <span className="summary-detail mono">
-            {integrity?.counts?.events ?? 0} events · {integrity?.counts?.checkpoints ?? 0} checkpoints · {integrity?.counts?.anchor_entries ?? 0} anchors
+            {data
+              ? `${integrity?.counts?.events ?? 0} events · ${integrity?.counts?.checkpoints ?? 0} checkpoints · ${integrity?.counts?.anchor_entries ?? 0} anchors`
+              : overview.error || health.error
+                ? "Evidence state unavailable"
+                : "Reading evidence state"}
           </span>
         </div>
         <div className="summary-item">
-          <span className="summary-label">Services</span>
+          <span className="summary-label">Test runs</span>
           <div className="summary-value">
-            <StatusPill
-              status={health.error ? "disconnected" : health.data ? (unavailable.length ? "warn" : "pass") : "untested"}
-              label={health.error ? "Disconnected" : health.data ? (unavailable.length ? `${serviceCount - unavailable.length}/${serviceCount} connected` : "All connected") : "Unknown"}
-            />
-          </div>
-          <span className="summary-detail">{health.data ? "Live gateway probe" : "Waiting for health probe"}</span>
-        </div>
-        <div className="summary-item">
-          <span className="summary-label">Workspace</span>
-          <div className="summary-value mono">
-            <EvidenceValue value={data?.runs?.total ?? 0} evidenceId="gateway:overview" status={evidenceStatus} />
+            {data?.runs ? (
+              <span className="summary-number">{data.runs.total ?? 0}</span>
+            ) : overviewLoading ? (
+              <span className="summary-unavailable">CHECKING</span>
+            ) : (
+              <span className="summary-unavailable">UNKNOWN</span>
+            )}
           </div>
           <span className="summary-detail">
-            {data?.runs ? `${data.runs.active ?? 0} active · ${data.runs.failed ?? 0} failed` : "Run state unknown"}
+            {data?.runs
+              ? `${data.runs.active ?? 0} active · ${data.runs.failed ?? 0} failed · gateway`
+              : overviewLoading
+                ? "Loading run state"
+                : "Run state unknown"}
           </span>
         </div>
         <div className="summary-item">
-          <span className="summary-label">Model</span>
+          <span className="summary-label">Findings</span>
           <div className="summary-value">
-            <StatusPill
-              status={health.data?.services?.model?.adapter === "mock" ? "untested" : health.data?.services?.model?.adapter ? "pass" : "warn"}
-              label={health.data?.services?.model?.adapter ? `${health.data.services.model.adapter} adapter` : "adapter unknown"}
-            />
+            {findings.error ? (
+              <span className="summary-unavailable">DISCONNECTED</span>
+            ) : findings.data ? (
+              <span className="summary-number">{allFindings.length}</span>
+            ) : data ? (
+              <span className="summary-number">{data.findings ?? 0}</span>
+            ) : findingsLoading ? (
+              <span className="summary-unavailable">CHECKING</span>
+            ) : (
+              <span className="summary-unavailable">UNKNOWN</span>
+            )}
           </div>
           <span className="summary-detail">
-            {mode ? mode.toUpperCase() : "mode unknown"} · {health.data?.services?.model?.model_id ?? "model id unknown"}
+            {findings.error
+              ? "Findings endpoint unreachable"
+              : findings.data
+                ? `${attentionFindings} high/critical · ${latestFinding.data?.verification?.status ? `latest PCF ${latestFinding.data.verification.status}` : "verification on selection"}`
+                : "Loading findings"}
           </span>
         </div>
       </div>
 
+      <section className="panel">
+        <header className="panel-head">
+          <div>
+            <h2>Recent test runs</h2>
+            <p>Execution state from the gateway, not a fixture.</p>
+          </div>
+          <button className="btn btn-ghost btn-xs" onClick={() => navigate("red")}>Open Test Runs <Icon name="arrow-right" size={13} /></button>
+        </header>
+        {overview.loading && !data ? (
+          <Loading label="Loading runs" />
+        ) : runs.length === 0 ? (
+          <Empty>No runs yet. Run an evaluation to create evidence.</Empty>
+        ) : (
+          <div className="table-wrap flush">
+            <table className="table runs-table">
+              <thead>
+                <tr><th>Run</th><th>Status</th><th>Mode</th><th>Model</th><th>Cases</th><th>Findings</th></tr>
+              </thead>
+              <tbody>
+                {runs.map((run: any) => (
+                  <tr key={run.run_id} onClick={() => navigate("red")} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter") navigate("red"); }}>
+                    <td className="mono">{run.run_id}</td>
+                    <td><StatusPill status={run.status} /></td>
+                    <td><StatusPill status={run.mode} /></td>
+                    <td className="mono">{run.adapter ?? "unknown"}</td>
+                    <td className="mono">{run.case_count ?? "—"}</td>
+                    <td className="mono">{run.findings?.length ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       <div className="overview-columns">
         <section className="panel">
           <header className="panel-head">
-            <div>
-              <h2>Recent test runs</h2>
-              <p>Execution state from the gateway, not a fixture.</p>
-            </div>
-            <button className="btn btn-ghost btn-xs" onClick={() => navigate("red")}>Open Test Runs <Icon name="arrow-right" size={13} /></button>
+            <div><h2>Recent findings</h2><p>Signed PCFs and selected verification state.</p></div>
+            <button className="btn btn-ghost btn-xs" onClick={() => navigate("findings")}>View all <Icon name="arrow-right" size={13} /></button>
           </header>
-          {overview.loading && !data ? (
-            <Loading label="Loading runs" />
-          ) : runs.length === 0 ? (
-            <Empty>No runs yet. Run an evaluation to create evidence.</Empty>
+          {findings.loading && !findings.data ? <Loading label="Loading findings" /> : recentFindings.length === 0 ? (
+            <Empty>No findings yet.</Empty>
           ) : (
-            <div className="table-wrap flush">
-              <table className="table">
-                <thead>
-                  <tr><th>Run</th><th>Status</th><th>Mode</th><th>Model</th><th>Cases</th><th>Findings</th></tr>
-                </thead>
-                <tbody>
-                  {runs.map((run: any) => (
-                    <tr key={run.run_id} onClick={() => navigate("red")} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter") navigate("red"); }}>
-                      <td className="mono">{run.run_id}</td>
-                      <td><StatusPill status={run.status} /></td>
-                      <td><StatusPill status={run.mode} /></td>
-                      <td className="mono">{run.adapter ?? "unknown"}</td>
-                      <td className="mono">{run.case_count ?? "—"}</td>
-                      <td className="mono">{run.findings?.length ?? 0}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="activity-list">
+              {recentFindings.map((finding: any) => (
+                <button key={finding.finding_id} className="activity-row" onClick={() => navigate("findings")}>
+                  <span className={`severity-dot severity-${finding.severity ?? "medium"}`} aria-hidden="true" />
+                  <span className="activity-copy">
+                    <strong>{finding.finding_type}</strong>
+                    <small className="mono">{finding.finding_id} · {finding.case_id ?? "case?"} · {finding.chain_seq ? `seq ${finding.chain_seq}` : "no seq"}</small>
+                  </span>
+                  <span className="activity-meta">
+                    <span className={`sev sev-${finding.severity}`}>{finding.severity}</span>
+                    <StatusPill status={finding.status === "signed" ? "signed" : "untested"} label={finding.status === "signed" ? "signed" : "unknown"} />
+                  </span>
+                </button>
+              ))}
             </div>
           )}
+          <div className="panel-foot">
+            <span className="mono">{latestFinding.data?.verification?.status ? `latest PCF ${latestFinding.data.verification.status}` : latestFinding.error ? "latest PCF disconnected" : "latest PCF not verified"}</span>
+            <span className="mono">{latestFinding.data?.verification?.anchor_source ? `anchor ${latestFinding.data.verification.anchor_source}` : ""}</span>
+          </div>
         </section>
 
-        <div className="overview-side">
-          <ServiceHealth health={health.data} error={health.error} loading={health.loading} onRetry={() => void health.refresh()} />
-          <section className="panel">
-            <header className="panel-head">
-              <div><h2>Recent findings</h2><p>Signed PCFs and selected verification state.</p></div>
-              <button className="btn btn-ghost btn-xs" onClick={() => navigate("findings")}>View all <Icon name="arrow-right" size={13} /></button>
-            </header>
-            {findings.loading && !findings.data ? <Loading label="Loading findings" /> : recentFindings.length === 0 ? (
-              <Empty>No findings yet.</Empty>
-            ) : (
-              <div className="activity-list">
-                {recentFindings.map((finding: any) => (
-                  <button key={finding.finding_id} className="activity-row" onClick={() => navigate("findings")}>
-                    <span className={`severity-dot severity-${finding.severity ?? "medium"}`} aria-hidden="true" />
-                    <span className="activity-copy">
-                      <strong>{finding.finding_type}</strong>
-                      <small className="mono">{finding.finding_id} · {finding.case_id ?? "case?"}</small>
-                    </span>
-                    <span className="activity-meta">
-                      <span className={`sev sev-${finding.severity}`}>{finding.severity}</span>
-                      <StatusPill status={finding.status === "signed" ? "pass" : "untested"} label={finding.status === "signed" ? "signed" : "unknown"} />
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="panel-foot">
-              <span className="mono">{latestFinding.data?.verification?.status ? `latest PCF ${latestFinding.data.verification.status}` : latestFinding.error ? "latest PCF disconnected" : "latest PCF not verified"}</span>
-              <span className="mono">{latestFinding.data?.verification?.anchor_source ? `anchor ${latestFinding.data.verification.anchor_source}` : ""}</span>
-            </div>
-          </section>
-        </div>
+        <ServiceHealth health={health.data} error={health.error} loading={health.loading} onRetry={() => void health.refresh()} />
       </div>
 
       <div className="overview-columns lower">

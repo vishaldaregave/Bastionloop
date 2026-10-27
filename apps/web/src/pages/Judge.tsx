@@ -38,39 +38,39 @@ export function Judge({ navigate }: { navigate: (route: string) => void }) {
 
   return (
     <div className="page">
-      <SectionTitle hint="A scoped Red shell, one goal, and a signed record of every attempt and denial.">
-        Judge Challenge
-      </SectionTitle>
+      <div className="page-heading">
+        <SectionTitle hint="A scoped Red shell, one goal, and a signed record of every attempt and denial.">
+          Judge Challenge
+        </SectionTitle>
+        <div className="page-actions">
+          <button className="btn btn-ghost" onClick={() => navigate("audit")}>Open audit explorer</button>
+          <button className="btn btn-primary" onClick={startChallenge} disabled={busy}>
+            {busy ? <Spinner label="Starting" /> : "Start judge challenge"}
+          </button>
+        </div>
+      </div>
 
       {(error || isolation.error) && (
         <ErrorBanner message={error || isolation.error || ""} onRetry={isolation.refresh} />
       )}
       {resetNote && <div className="note-line">{resetNote}</div>}
 
-      <div className="judge-hero">
-        <div>
-          <span className="hero-kicker">PARTICIPATORY PROOF</span>
-          <h1>“Try to break it. We'll sign your attempt.”</h1>
-          <p>
+      <Card title="How the challenge runs" subtitle="Participatory proof, with every attempt recorded in the evidence trail.">
+        <div className="judge-intro">
+          <p className="small muted">
             The challenge issues a Red capability token scoped to one run and a command to execute inside the Red
             container. The judge attempts file reads, direct network paths, a controlled metadata-shaped local target
             and a prompt injection. The gateway records each denial. At the end, the run has findings and the audit
             trail contains the judge's own attempt.
           </p>
-          <div className="row-actions">
-            <button className="btn btn-primary" onClick={startChallenge} disabled={busy}>
-              {busy ? <Spinner label="Starting" /> : "Start judge challenge"}
-            </button>
-            <button className="btn btn-ghost" onClick={() => navigate("audit")}>Open audit explorer</button>
+          <div className="judge-steps">
+            <div className="judge-step"><span>1</span>Start the challenge: a run is executed and a scoped token is issued.</div>
+            <div className="judge-step"><span>2</span>Hand the judge the command; it runs inside the Red container.</div>
+            <div className="judge-step"><span>3</span>Every attempt is logged; denials are signed evidence.</div>
+            <div className="judge-step"><span>4</span>Open the run's PCF and verify it offline.</div>
           </div>
         </div>
-        <div className="judge-steps">
-          <div className="judge-step"><span>1</span>Start the challenge: a run is executed and a scoped token is issued.</div>
-          <div className="judge-step"><span>2</span>Hand the judge the command; it runs inside the Red container.</div>
-          <div className="judge-step"><span>3</span>Every attempt is logged; denials are signed evidence.</div>
-          <div className="judge-step"><span>4</span>Open the run's PCF and verify it offline.</div>
-        </div>
-      </div>
+      </Card>
 
       {session && (
         <Card

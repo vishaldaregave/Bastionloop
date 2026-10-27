@@ -24,6 +24,8 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -35,10 +37,14 @@ export function CommandPalette({
 
   useEffect(() => {
     if (!open) return;
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery("");
     setActive(0);
     const timer = window.setTimeout(() => inputRef.current?.focus(), 20);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      previousFocus.current?.focus();
+    };
   }, [open]);
 
   useEffect(() => {
@@ -62,6 +68,7 @@ export function CommandPalette({
     <div className="palette-backdrop" onMouseDown={onClose}>
       <div
         className="palette"
+        ref={paletteRef}
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
@@ -79,6 +86,20 @@ export function CommandPalette({
           } else if (event.key === "Enter") {
             event.preventDefault();
             execute(filtered[active]);
+          } else if (event.key === "Tab") {
+            const focusable = paletteRef.current?.querySelectorAll<HTMLElement>(
+              'input, button, [href], [tabindex]:not([tabindex="-1"])',
+            );
+            if (!focusable?.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
           }
         }}
       >
@@ -90,17 +111,23 @@ export function CommandPalette({
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pages, actions and settings…"
             aria-label="Search commands"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="palette-commands"
+            aria-autocomplete="list"
+            aria-activedescendant={filtered[active] ? `palette-option-${active}` : undefined}
             autoComplete="off"
             spellCheck={false}
           />
           <kbd>Esc</kbd>
         </div>
-        <div className="palette-list" ref={listRef} role="listbox" aria-label="Commands">
+        <div className="palette-list" ref={listRef} id="palette-commands" role="listbox" aria-label="Commands">
           {filtered.length === 0 && <div className="palette-empty">No matching commands.</div>}
           {filtered.map((command, index) => (
             <button
               key={command.id}
               type="button"
+              id={`palette-option-${index}`}
               role="option"
               aria-selected={index === active}
               data-command-index={index}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { usePolling } from "../hooks";
 import { Card, Empty, ErrorBanner, Field, Loading, SectionTitle, Spinner, StatusPill } from "../components/UI";
@@ -9,14 +9,38 @@ export function Suite() {
   const [report, setReport] = useState<any>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
-  const items: any[] = (results.data?.results ?? []).map((item: any) => ({
-    ...item,
-    status: String(item.status ?? "UNTESTED").toLowerCase(),
-  }));
+  const items: any[] = useMemo(
+    () =>
+      (results.data?.results ?? []).map((item: any) => ({
+        ...item,
+        status: String(item.status ?? "UNTESTED").toLowerCase(),
+      })),
+    [results.data],
+  );
   const summary = results.data?.summary ?? { pass: 0, fail: 0, error: 0, untested: 0, recorded: 0, total: 0 };
   const modelAdapter = results.data?.model_adapter;
   const modelKind = results.data?.model_testing_kind;
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredItems = useMemo(
+    () =>
+      normalizedQuery
+        ? items.filter((item) =>
+            `${item.test_id} ${item.name} ${item.category} ${item.status}`.toLowerCase().includes(normalizedQuery),
+          )
+        : items,
+    [items, normalizedQuery],
+  );
+  const selectedItem = items.find((item) => item.test_id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (filteredItems.length === 0) return;
+    if (selectedId && filteredItems.some((item) => item.test_id === selectedId)) return;
+    const priority = filteredItems.find((item) => item.status !== "pass") ?? filteredItems[0];
+    setSelectedId(priority.test_id);
+  }, [filteredItems, selectedId]);
 
   async function runSuite() {
     setBusy(true);
@@ -79,7 +103,7 @@ export function Suite() {
       </div>
 
       <Card
-        title="Suite run"
+        title="Test results"
         subtitle={
           results.data?.generated_at
             ? `Last run ${new Date(results.data.generated_at).toLocaleString()} · ${results.data.runtime} · ${modelKind ?? "model unknown"}`
@@ -87,9 +111,16 @@ export function Suite() {
         }
         actions={
           <div className="row-actions">
+            <input
+              className="input compact"
+              aria-label="Filter test results"
+              placeholder="Filter tests…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
             {modelAdapter && (
               <StatusPill
-                status={modelAdapter === "mock" ? "untested" : "pass"}
+                status={modelAdapter === "mock" ? "untested" : "neutral"}
                 label={modelAdapter === "mock" ? "MOCK MODEL" : "REAL MODEL"}
               />
             )}
@@ -103,26 +134,88 @@ export function Suite() {
         }
       >
         {results.loading && !results.data && <Loading label="Loading suite results" />}
-        {!results.loading && items.length === 0 && <Empty>No results yet. Run the suite to populate the grid.</Empty>}
-        <div className="test-grid">
-          {items.map((result: any) => (
-            <div key={result.test_id} className={`test-cell test-${result.status}`}>
-              <div className="test-top">
-                <span className="mono strong">{result.test_id}</span>
-                <StatusPill status={result.status} />
-              </div>
-              <div className="test-name">{result.name}</div>
-              <div className="test-detail">
-                <span>expected: {result.expected}</span>
-                <span>actual: {result.actual}</span>
-                <span className="mono">{result.evidence_id ?? "no evidence id"}</span>
-              </div>
-              {result.detail && <div className="test-note">{result.detail}</div>}
-              {result.limitations && <div className="test-note">limitations: {result.limitations}</div>}
-            </div>
-          ))}
-        </div>
+        {!results.loading && items.length === 0 && <Empty>No results yet. Run the suite to populate the report.</Empty>}
+        {items.length > 0 && filteredItems.length === 0 && <Empty>No tests match “{query}”.</Empty>}
+        {filteredItems.length > 0 && (
+          <div className="table-wrap">
+            <table className="table suite-table">
+              <thead>
+                <tr>
+                  <th>Test</th>
+                  <th>Status</th>
+                  <th>Expected</th>
+                  <th>Actual</th>
+                  <th>Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredItems.map((result: any) => (
+                  <tr
+                    key={result.test_id}
+                    className={selectedId === result.test_id ? "selected" : ""}
+                    tabIndex={0}
+                    onClick={() => setSelectedId(result.test_id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedId(result.test_id);
+                      }
+                    }}
+                  >
+                    <td>
+                      <div className="suite-test-cell">
+                        <span className="mono strong">{result.test_id}</span>
+                        <span className="suite-test-name">{result.name}</span>
+                      </div>
+                    </td>
+                    <td><StatusPill status={result.status} /></td>
+                    <td className="suite-summary-text" title={result.expected}>{result.expected}</td>
+                    <td className="suite-summary-text" title={result.actual}>{result.actual}</td>
+                    <td className="mono tiny">{result.evidence_id ?? "no evidence id"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
+
+      {selectedItem && (
+        <Card
+          title={`${selectedItem.test_id} · ${selectedItem.name}`}
+          subtitle={`${selectedItem.category} · ${selectedItem.test_kind}${selectedItem.model_adapter ? ` · ${selectedItem.model_adapter}` : ""}`}
+          actions={<StatusPill status={selectedItem.status} />}
+        >
+          <div className="detail-grid">
+            <Field label="Expected" value={selectedItem.expected} />
+            <Field label="Actual" value={selectedItem.actual} />
+            <Field label="Evidence reference" value={selectedItem.evidence_id ?? "not recorded"} mono />
+            <Field label="Evidence sequence" value={selectedItem.evidence_seq ?? "—"} mono />
+            <Field
+              label="Evidence hash"
+              value={
+                selectedItem.evidence_hash ? (
+                  <span className="mono ellipsis" title={selectedItem.evidence_hash}>
+                    {selectedItem.evidence_hash}
+                  </span>
+                ) : (
+                  "not recorded"
+                )
+              }
+            />
+            <Field label="Duration" value={selectedItem.duration_ms != null ? `${Math.round(selectedItem.duration_ms)} ms` : "—"} mono />
+            <Field label="Test kind" value={selectedItem.test_kind ?? "unknown"} />
+            <Field label="Model adapter" value={selectedItem.model_adapter ?? "not model-bound"} mono />
+            <Field label="Recorded" value={selectedItem.ts ? new Date(selectedItem.ts).toLocaleString() : "—"} />
+          </div>
+          {selectedItem.detail && <div className="inline-note">{selectedItem.detail}</div>}
+          {selectedItem.limitations && (
+            <div className="mini-note">
+              <strong>Limitation.</strong> {selectedItem.limitations}
+            </div>
+          )}
+        </Card>
+      )}
 
       <div className="two-col">
         <Card title="Download the report" subtitle="Same evidence, three formats">

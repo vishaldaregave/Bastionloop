@@ -66,7 +66,7 @@ export function Isolation() {
   async function runComparison() {
     setBusy(true);
     try {
-      setNote("Running the BastionLoop baseline...");
+      setNote("Running the hardened baseline...");
       if (!(await runMode("hardened"))) return;
       setNote("Running the deliberate naive baseline...");
       if (!(await runMode("naive"))) return;
@@ -94,7 +94,7 @@ export function Isolation() {
       )}
 
       <Card
-        title="Naive vs BastionLoop"
+        title="Naive vs Hardened"
         subtitle="The same attack corpus runs in both modes. Only the evidence changes."
         actions={
           <div className="row-actions">
@@ -128,7 +128,7 @@ export function Isolation() {
           </div>
           <div className="compare-col">
             <div className="compare-head">
-              <span className="compare-title">BastionLoop</span>
+              <span className="compare-title">Hardened</span>
               <StatusPill status="hardened" />
             </div>
             <p className="muted small">Per-session model, sealed Blue, padded verdicts, signed evidence. This is the isolation claim the PCF proves.</p>

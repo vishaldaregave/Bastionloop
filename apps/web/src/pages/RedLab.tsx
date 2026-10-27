@@ -179,7 +179,7 @@ export function RedLab({ navigate }: { navigate: (route: string) => void }) {
             <label className="label">
               Mode
               <select value={mode} onChange={(event) => setMode(event.target.value as "hardened" | "naive")}>
-                <option value="hardened">BastionLoop (hardened)</option>
+                <option value="hardened">Hardened</option>
                 <option value="naive">Naive baseline (deliberate demo)</option>
               </select>
             </label>
@@ -206,7 +206,7 @@ export function RedLab({ navigate }: { navigate: (route: string) => void }) {
           <Empty>No runs yet. Create one to start an evidence trail.</Empty>
         ) : (
           <div className="table-wrap flush">
-            <table className="table">
+            <table className="table runs-table">
               <thead>
                 <tr><th>Run</th><th>Status</th><th>Mode</th><th>Model</th><th>Cases</th><th>Findings</th><th>Created</th></tr>
               </thead>
@@ -251,7 +251,7 @@ export function RedLab({ navigate }: { navigate: (route: string) => void }) {
               label="Model kind"
               value={
                 <StatusPill
-                  status={selectedRun.adapter === "mock" ? "untested" : "pass"}
+                  status={selectedRun.adapter === "mock" ? "untested" : selectedRun.adapter ? "neutral" : "warn"}
                   label={selectedRun.adapter === "mock" ? "MOCK MODEL" : selectedRun.adapter ? "REAL MODEL" : "UNKNOWN"}
                 />
               }
@@ -296,6 +296,7 @@ export function RedLab({ navigate }: { navigate: (route: string) => void }) {
               <h3 className="subhead">Manual scoped inference</h3>
               <textarea
                 className="textarea"
+                aria-label="Prompt for scoped inference"
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 rows={4}

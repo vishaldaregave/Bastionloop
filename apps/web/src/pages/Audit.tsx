@@ -294,7 +294,7 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
         {events.loading && !events.data && <Loading label="Loading evidence timeline" />}
         {!events.loading && filtered.length === 0 && <Empty>{filter ? "No events match the filter." : "No events yet."}</Empty>}
         <div className="table-wrap">
-          <table className="table">
+          <table className="table events-table">
             <thead>
               <tr>
                 <th>Seq</th>

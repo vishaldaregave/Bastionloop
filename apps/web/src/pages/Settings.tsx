@@ -141,6 +141,12 @@ export function Settings({
           <div><span>Policy</span><strong>{health.data?.policy?.version ?? "unknown"}</strong></div>
           <div><span>Gateway image</span><strong className="mono">{health.data?.gateway_image ?? "unknown"}</strong></div>
         </div>
+        {health.data?.environment && health.data.environment !== "production" && (
+          <div className="settings-note">
+            {health.data.environment} runtime. Mock adapters and local demo controls may be in use; results are evidence
+            of the tested configuration, not production readiness.
+          </div>
+        )}
         <div className="settings-service-row">
           <StatusPill
             status={health.error ? "disconnected" : unavailable.length === 0 ? "pass" : "warn"}

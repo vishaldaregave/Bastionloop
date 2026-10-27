@@ -27,7 +27,7 @@ export function TimingChart({ timing }: { timing: any }) {
       p: timing?.naive?.distinguishability?.p_value,
     },
     {
-      mode: "BastionLoop",
+      mode: "Hardened",
       allow: timing?.hardened?.allow?.p50 ?? 0,
       block: timing?.hardened?.block?.p50 ?? 0,
       p: timing?.hardened?.distinguishability?.p_value,
@@ -72,7 +72,7 @@ export function OverheadChart({ overhead }: { overhead: any }) {
           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--accent-soft)" }} />
           <Legend wrapperStyle={{ fontSize: 10, color: "var(--muted)" }} />
           <Bar dataKey="p50" name="p50" fill="var(--accent)" radius={[3, 3, 0, 0]} maxBarSize={40} />
-          <Bar dataKey="p95" name="p95" fill="var(--violet)" radius={[3, 3, 0, 0]} maxBarSize={40} />
+          <Bar dataKey="p95" name="p95" fill="var(--text-secondary)" radius={[3, 3, 0, 0]} maxBarSize={40} />
         </BarChart>
       </ResponsiveContainer>
     </div>

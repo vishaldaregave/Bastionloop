@@ -79,14 +79,18 @@ export default function App() {
 
   const mode = health.data?.mode;
   const modelAdapter = health.data?.services?.model?.adapter;
+  const healthLoading = health.loading && !health.data;
+  const integrityLoading = integrity.loading && !integrity.data;
   const verified = integrity.data?.status === "VERIFIED";
   const integrityStatus = integrity.error
     ? "disconnected"
-    : !integrity.data
-      ? "untested"
-      : verified
-        ? "verified"
-        : "unverified";
+    : integrityLoading
+      ? "checking"
+      : !integrity.data
+        ? "untested"
+        : verified
+          ? "verified"
+          : "unverified";
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -275,7 +279,8 @@ export default function App() {
                 className={`nav-item ${active ? "active" : ""}`}
                 onClick={() => navigate(destination)}
                 aria-current={active ? "page" : undefined}
-                title={collapsed ? item.label : undefined}
+                aria-label={item.label}
+                title={item.label}
               >
                 <span className="nav-glyph"><Icon name={item.icon} size={16} /></span>
                 {!collapsed && <span className="nav-label">{item.label}</span>}
@@ -290,15 +295,27 @@ export default function App() {
             <>
               <div className="sidebar-status">
                 <span className={`status-dot ${verified ? "ok" : integrity.error ? "bad" : "idle"}`} />
-                <span>{integrity.error ? "Gateway disconnected" : verified ? "Ledger verified" : integrity.data ? "Ledger failed" : "No evidence"}</span>
+                <span>
+                  {integrity.error
+                    ? "Gateway disconnected"
+                    : integrityLoading
+                      ? "Checking evidence"
+                      : verified
+                        ? "Ledger verified"
+                        : integrity.data
+                          ? "Ledger failed"
+                          : "No evidence"}
+                </span>
               </div>
               <div className="sidebar-meta">
-                <span>{integrity.data?.counts?.events ?? 0} events</span>
+                <span>{integrity.data ? `${integrity.data.counts?.events ?? 0} events` : integrityLoading ? "Reading ledger" : "0 events"}</span>
                 <span>·</span>
-                <span>{mode ? mode.toUpperCase() : "MODE UNKNOWN"}</span>
+                <span>{healthLoading ? "CHECKING MODE" : mode ? mode.toUpperCase() : "MODE UNKNOWN"}</span>
               </div>
               <div className="sidebar-meta">
-                <span>{modelAdapter ? `${modelAdapter.toUpperCase()} MODEL` : "MODEL UNKNOWN"}</span>
+                <span>{healthLoading ? "CHECKING ENV" : health.data?.environment?.toUpperCase() ?? "ENV UNKNOWN"}</span>
+                <span>·</span>
+                <span>{healthLoading ? "CHECKING MODEL" : modelAdapter ? `${modelAdapter.toUpperCase()} MODEL` : "MODEL UNKNOWN"}</span>
               </div>
             </>
           ) : (
@@ -309,54 +326,58 @@ export default function App() {
 
       <main className="main">
         <header className="topbar">
-          <div className="topbar-left">
-            <span className="crumb">BastionLoop</span>
-            {meta.sectionLabel !== meta.label && (
-              <>
-                <Icon name="chevron-right" size={12} className="crumb-separator" />
-                <span className="crumb">{meta.sectionLabel}</span>
-              </>
-            )}
-            <Icon name="chevron-right" size={12} className="crumb-separator" />
-            <span className="topbar-title">{meta.label}</span>
-          </div>
-          <div className="topbar-right">
-            <button className="search-trigger" onClick={() => setPaletteOpen(true)} aria-label="Open command palette">
-              <Icon name="search" size={14} />
-              <span>Search</span>
-              <kbd>Ctrl K</kbd>
-            </button>
-            <button
-              className="icon-button"
-              title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-              aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-            >
-              <Icon name={theme === "light" ? "moon" : "sun"} size={15} />
-            </button>
-            <button
-              className={`icon-button ${route === "settings" ? "active" : ""}`}
-              title="Settings"
-              aria-label="Settings"
-              onClick={() => navigate("settings")}
-            >
-              <Icon name="settings" size={15} />
-            </button>
+          <div className="topbar-inner">
+            <div className="topbar-left">
+              <span className="crumb">BastionLoop</span>
+              {meta.sectionLabel !== meta.label && (
+                <>
+                  <Icon name="chevron-right" size={12} className="crumb-separator" />
+                  <span className="crumb">{meta.sectionLabel}</span>
+                </>
+              )}
+              <Icon name="chevron-right" size={12} className="crumb-separator" />
+              <span className="topbar-title">{meta.label}</span>
+            </div>
+            <div className="topbar-right">
+              <button className="search-trigger" onClick={() => setPaletteOpen(true)} aria-label="Open command palette">
+                <Icon name="search" size={14} />
+                <span>Search</span>
+                <kbd>Ctrl K</kbd>
+              </button>
+              <button
+                className="icon-button"
+                title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+              >
+                <Icon name={theme === "light" ? "moon" : "sun"} size={15} />
+              </button>
+              <button
+                className={`icon-button ${route === "settings" ? "active" : ""}`}
+                title="Settings"
+                aria-label="Settings"
+                onClick={() => navigate("settings")}
+              >
+                <Icon name="settings" size={15} />
+              </button>
+            </div>
           </div>
         </header>
 
         {SUBNAV[meta.section] && (
           <div className="subnav" role="navigation" aria-label={`${meta.sectionLabel} views`}>
-            {SUBNAV[meta.section].map((tab) => (
-              <button
-                key={tab.route}
-                className={`subnav-item ${route === tab.route ? "active" : ""}`}
-                onClick={() => navigate(tab.route)}
-                aria-current={route === tab.route ? "page" : undefined}
-              >
-                {tab.label}
-              </button>
-            ))}
+            <div className="subnav-inner">
+              {SUBNAV[meta.section].map((tab) => (
+                <button
+                  key={tab.route}
+                  className={`subnav-item ${route === tab.route ? "active" : ""}`}
+                  onClick={() => navigate(tab.route)}
+                  aria-current={route === tab.route ? "page" : undefined}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -376,11 +397,33 @@ export default function App() {
           <span>BastionLoop · evidence workbench</span>
           <span className="footer-status">
             <StatusPill
-              status={verified ? "verified" : integrity.error ? "disconnected" : integrity.data ? "failed" : "untested"}
-              label={integrity.error ? "GATEWAY DISCONNECTED" : verified ? "LEDGER VERIFIED" : integrity.data ? "LEDGER FAILED" : "NO EVIDENCE"}
+              status={
+                verified
+                  ? "verified"
+                  : integrity.error
+                    ? "disconnected"
+                    : integrityLoading
+                      ? "checking"
+                      : integrity.data
+                        ? "failed"
+                        : "untested"
+              }
+              label={
+                integrity.error
+                  ? "GATEWAY DISCONNECTED"
+                  : integrityLoading
+                    ? "CHECKING EVIDENCE"
+                    : verified
+                      ? "LEDGER VERIFIED"
+                      : integrity.data
+                        ? "LEDGER FAILED"
+                        : "NO EVIDENCE"
+              }
             />
           </span>
-          <span className="mono">gateway {health.data?.gateway_image ?? "unknown"}</span>
+          <span className="mono">
+            gateway {healthLoading ? "checking" : health.data?.gateway_image ?? "unknown"}
+          </span>
         </footer>
       </main>
 
