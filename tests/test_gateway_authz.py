@@ -239,3 +239,23 @@ def test_tamper_and_judge_are_disabled_when_configured_off(gateway):
     admin = auth(ADMIN)
     assert client.post("/v1/admin/tamper", json={"mode": "edit"}, headers=admin).status_code == 403
     assert client.post("/v1/judge/session", json={}, headers=admin).status_code == 403
+
+
+def test_health_alias_and_policy_endpoint_are_read_only(gateway):
+    client, _app_module, red_token = gateway
+    health = client.get("/health")
+    assert health.status_code == 200
+    body = health.json()
+    assert body["service"] == "gateway"
+    assert "limits" in body
+    assert body["limits"]["checkpoint_every"] >= 1
+
+    policy = client.get("/v1/policy", headers=auth(ADMIN))
+    assert policy.status_code == 200
+    document = policy.json()
+    assert document["status"] in {"LOADED", "UNAVAILABLE"}
+    assert "hash" in document
+
+    denied = client.get("/v1/policy", headers=auth(red_token))
+    assert denied.status_code == 403
+    assert client.post("/v1/policy", json={}).status_code == 405

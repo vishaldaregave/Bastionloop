@@ -98,8 +98,8 @@ export function Audit({ navigate }: { navigate: (route: string) => void }) {
 
   return (
     <div className="page">
-      <SectionTitle hint="Append-only evidence, verifier results and controlled tamper tests. Technical provenance stays available on demand.">
-        Evidence & PCFs
+      <SectionTitle hint="Append-only evidence, Merkle and anchor verification, PCF inspection and controlled tamper tests.">
+        Evidence Verification
       </SectionTitle>
 
       {(events.error || integrity.error) && (

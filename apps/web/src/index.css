@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans antialiased;
+    background-color: #0C0D11;
+    color: #F0F2F6;
+  }
+}
+
+/* Subtle, refined enterprise scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #101217;
+}
+::-webkit-scrollbar-thumb {
+  background: #232732;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #363C4D;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.18s ease-out forwards;
+}
+
+/* Refined crisp borders without neon halos */
+.glow-border-blue {
+  border-color: #2563EB;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.2);
+}
+
+.glow-border-cyan {
+  border-color: #10B981;
+  box-shadow: 0 1px 3px rgba(16, 185, 129, 0.2);
+}
+
+.glow-border-red {
+  border-color: #E11D48;
+  box-shadow: 0 1px 3px rgba(225, 29, 72, 0.2);
+}
+
+.glow-border-violet {
+  border-color: #7C3AED;
+  box-shadow: 0 1px 3px rgba(124, 58, 237, 0.2);
+}
+
+@media print {
+  header, aside, button, nav {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}

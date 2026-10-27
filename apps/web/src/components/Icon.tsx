@@ -27,6 +27,14 @@ export type IconName =
   | "refresh"
   | "key"
   | "lock"
+  | "users"
+  | "server"
+  | "file"
+  | "gauge"
+  | "award"
+  | "bell"
+  | "box"
+  | "cpu"
   | "arrow-right";
 
 const PATHS: Record<IconName, ReactNode> = {
@@ -156,6 +164,58 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   "arrow-right": <path d="M5 12h14M13 6l6 6-6 6" />,
+  users: (
+    <>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8" />
+    </>
+  ),
+  server: (
+    <>
+      <rect x="3" y="4" width="18" height="7" rx="2" />
+      <rect x="3" y="13" width="18" height="7" rx="2" />
+      <path d="M7 7.5h.01M7 16.5h.01" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 2v6h6M8 13h8M8 17h5" />
+    </>
+  ),
+  gauge: (
+    <>
+      <path d="M20.5 15a8.5 8.5 0 1 0-17 0" />
+      <path d="M12 15 16 9" />
+      <circle cx="12" cy="15" r="1" />
+    </>
+  ),
+  award: (
+    <>
+      <circle cx="12" cy="8" r="5" />
+      <path d="m8.5 12-1.5 9 5-3 5 3-1.5-9" />
+    </>
+  ),
+  bell: (
+    <>
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+      <path d="M10 21h4" />
+    </>
+  ),
+  box: (
+    <>
+      <path d="m12 2 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 7 9 5 9-5M3 12l9 5 9-5M3 17l9 5 9-5" />
+    </>
+  ),
+  cpu: (
+    <>
+      <rect x="5" y="5" width="14" height="14" rx="2" />
+      <rect x="9" y="9" width="6" height="6" rx="1" />
+      <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
+    </>
+  ),
 };
 
 export function Icon({

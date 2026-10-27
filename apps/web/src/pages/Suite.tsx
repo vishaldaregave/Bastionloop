@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { usePolling } from "../hooks";
+import { Icon } from "../components/Icon";
 import { Card, Empty, ErrorBanner, Field, Loading, SectionTitle, Spinner, StatusPill } from "../components/UI";
 
 export function Suite() {
   const results = usePolling(() => api.get<any>("/v1/suite/results"), 5000);
+  const integrity = usePolling(() => api.get<any>("/v1/ledger/verify"), 10000);
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<any>(null);
   const [reportBusy, setReportBusy] = useState(false);
@@ -80,11 +82,34 @@ export function Suite() {
 
   return (
     <div className="page">
-      <SectionTitle hint="Results and coverage from the challenge suite. PASS, FAIL, ERROR and UNTESTED are distinct outcomes.">
-        Trust Report
+      <SectionTitle hint="A verifiable attestation of isolation, contamination resistance and cryptographic provenance. PASS, FAIL, ERROR and UNTESTED are distinct outcomes.">
+        Trust Passport
       </SectionTitle>
 
       {(results.error || error) && <ErrorBanner message={results.error || error || ""} onRetry={results.refresh} />}
+
+      <section className="passport-banner">
+        <div className="passport-mark"><Icon name="award" size={28} /></div>
+        <div className="passport-copy">
+          <span className="passport-eyebrow">BASTIONLOOP ASSURANCE PASSPORT</span>
+          <h2>Test Integrity Attestation</h2>
+          <p>
+            An evidence-linked report of control coverage, cryptographic provenance and explicit residual risk.
+            It is not a trust score and does not claim host or key integrity.
+          </p>
+          <div className="passport-facts">
+            <span><b>Evidence</b><StatusPill status={integrity.data?.status === "VERIFIED" ? "verified" : integrity.error ? "disconnected" : integrity.data ? "failed" : "checking"} label={integrity.data?.status ?? (integrity.error ? "UNAVAILABLE" : "CHECKING")} /></span>
+            <span><b>Coverage</b><strong className="mono">{summary.total ? `${summary.pass}/${summary.total}` : "no run"}</strong></span>
+            <span><b>Model</b><strong className="mono">{modelAdapter ?? "unknown"}</strong></span>
+            <span><b>Mode</b><strong className="mono">{results.data?.mode ?? "hardened"}</strong></span>
+          </div>
+        </div>
+        <div className="passport-seal">
+          <span>ATTESTATION</span>
+          <strong>{integrity.data?.status === "VERIFIED" ? "EVIDENCE VERIFIED" : "NOT ATTESTED"}</strong>
+          <small>{results.data?.generated_at ? new Date(results.data.generated_at).toLocaleString() : "No suite run"}</small>
+        </div>
+      </section>
 
       <div className="status-legend" aria-label="Suite status legend">
         <span className="muted small">Status semantics:</span>

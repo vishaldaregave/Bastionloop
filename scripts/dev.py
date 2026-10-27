@@ -75,7 +75,7 @@ def _wait_health(url: str, name: str, attempts: int = 120) -> bool:
     return False
 
 
-def start_services(clean: bool = False) -> list[subprocess.Popen[bytes]]:
+def start_services(clean: bool = False, include_web: bool = True) -> list[subprocess.Popen[bytes]]:
     env = _env()
     data_dir = Path(env.get("BASTION_DATA_DIR", ROOT / "var"))
     logs = data_dir / "logs"
@@ -99,11 +99,27 @@ def start_services(clean: bool = False) -> list[subprocess.Popen[bytes]]:
             _stop(processes)
             raise SystemExit(f"failed to start {name}; see {log_path}")
         print(f"  {name:8} http://127.0.0.1:{port}  (log: var/logs/{name}.log)")
+
+    if include_web:
+        web_dir = ROOT / "apps" / "web"
+        if (web_dir / "node_modules").exists():
+            web_log = logs / "web.log"
+            handle = web_log.open("ab")
+            npm_bin = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
+            web_proc = subprocess.Popen(
+                [npm_bin, "run", "dev"],
+                cwd=str(web_dir),
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+            )
+            processes.append(web_proc)
+            print("  web      http://127.0.0.1:5173  (log: var/logs/web.log)")
+
     (logs / "pids.json").write_text(
         json.dumps(
             [
-                {"name": name, "pid": process.pid, "port": port}
-                for (name, _, port), process in zip(SERVICES, processes)
+                {"name": getattr(p, "_name", f"proc-{i}"), "pid": p.pid}
+                for i, p in enumerate(processes)
             ],
             indent=2,
         ),
@@ -115,7 +131,13 @@ def start_services(clean: bool = False) -> list[subprocess.Popen[bytes]]:
 def _stop(processes: list[subprocess.Popen[bytes]]) -> None:
     for process in processes:
         if process.poll() is None:
-            process.terminate()
+            if sys.platform == "win32":
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
+                except Exception:
+                    process.terminate()
+            else:
+                process.terminate()
     deadline = time.time() + 8
     for process in processes:
         remaining = max(0.1, deadline - time.time())
@@ -140,9 +162,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--clean", action="store_true", help="delete var/ before starting")
     parser.add_argument("--once", action="store_true", help="run demo and exit")
     parser.add_argument("--no-block", action="store_true", help="start services and exit")
+    parser.add_argument("--no-web", action="store_true", help="skip launching frontend dev server")
     args = parser.parse_args(argv)
 
-    processes = start_services(clean=args.clean)
+    processes = start_services(clean=args.clean, include_web=not args.no_web and not (args.demo or args.once))
     code = 0
     keep_running = False
     try:

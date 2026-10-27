@@ -8,6 +8,7 @@ import queue
 import time
 from typing import Any
 
+import psutil
 from cryptography.hazmat.primitives import serialization
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -174,14 +175,33 @@ def _notary_endpoint(path: str, params: dict[str, Any] | None = None) -> Any:
     )
 
 
+def _system_metrics() -> dict[str, float | int | None]:
+    try:
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+        return {
+            "cpu_percent": round(psutil.cpu_percent(interval=0.1), 1),
+            "memory_percent": round(memory.percent, 1),
+            "disk_percent": round(disk.percent, 1),
+            "cpu_count": psutil.cpu_count(logical=True),
+        }
+    except Exception:
+        return {"cpu_percent": None, "memory_percent": None, "disk_percent": None, "cpu_count": None}
+
+
 @app.get("/v1/health")
 def health() -> dict[str, Any]:
     services: dict[str, Any] = {}
     for name in ("notary", "signer", "witness", "anchor", "model", "blue"):
+        started = time.perf_counter()
         try:
             services[name] = get_json(rt.settings.service(name) + "/v1/health", name, timeout=0.4)
+            services[name]["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
         except ServiceError:
-            services[name] = {"status": "unavailable"}
+            services[name] = {
+                "status": "unavailable",
+                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+            }
     return {
         "status": "ok",
         "service": "gateway",
@@ -192,7 +212,46 @@ def health() -> dict[str, Any]:
         "policy_error": None if rt.settings.is_production else rt.policy_error,
         "gateway_image": rt.gateway_image,
         "runs": len(rt.runs),
+        "limits": {
+            "checkpoint_every": rt.settings.checkpoint_every,
+            "padding_ms": rt.settings.padding_bucket_ms,
+            "max_run_cases": 200,
+            "judge_max_cases": 20,
+            "token_ttl_seconds": {"min": 30, "max": 86400},
+            "allow_naive": rt.settings.allow_naive,
+            "allow_tamper": rt.settings.allow_tamper,
+            "allow_judge": rt.settings.allow_judge,
+            "allow_key_gen": rt.settings.allow_key_gen,
+        },
+        "system": _system_metrics(),
         "services": services,
+    }
+
+
+@app.get("/health")
+def health_alias() -> dict[str, Any]:
+    return health()
+
+
+@app.get("/v1/policy")
+def policy_document(authorization: str = Header(default="")) -> dict[str, Any]:
+    cap = _cap(authorization)
+    if cap.tenant_id != "system":
+        _deny(cap, "admin:policy", None, "admin-only")
+    if rt.policy_bundle is None:
+        return {
+            "status": "UNAVAILABLE",
+            "version": rt.policy_version,
+            "hash": rt.policy_hash,
+            "error": rt.policy_error or "policy bundle unavailable",
+        }
+    bundle = rt.policy_bundle.bundle
+    return {
+        "status": "LOADED",
+        "version": rt.policy_version,
+        "hash": rt.policy_hash,
+        "signature_verified": bool(rt.control_pub and rt.policy_bundle.verify_signature(rt.control_pub)),
+        "bundle": bundle,
     }
 
 

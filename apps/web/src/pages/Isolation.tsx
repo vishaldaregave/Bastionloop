@@ -78,8 +78,8 @@ export function Isolation() {
 
   return (
     <div className="page">
-      <SectionTitle hint="Executed boundary attempts, channel scans and model freshness — with untested controls left untested.">
-        Isolation
+      <SectionTitle hint="Container isolation boundaries, declared capability paths and executed boundary attempts — with untested controls left untested.">
+        Sandbox Topology
       </SectionTitle>
 
       {(overview.error || isolation.error || runs.error) && (

@@ -4,17 +4,11 @@ import { usePolling } from "../hooks";
 import { Icon } from "../components/Icon";
 import { SectionTitle, StatusPill } from "../components/UI";
 
-export type Theme = "light" | "dark";
-
 export function Settings({
-  theme,
-  onThemeChange,
   openPalette,
   sidebarCollapsed,
   onToggleSidebar,
 }: {
-  theme: Theme;
-  onThemeChange: (theme: Theme) => void;
   openPalette: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
@@ -25,39 +19,18 @@ export function Settings({
 
   const services = health.data?.services ?? {};
   const unavailable = Object.entries(services).filter(([, value]: [string, any]) => value?.status !== "ok");
+  const healthLoading = health.loading && !health.data;
 
   return (
     <div className="page settings-page">
-      <SectionTitle hint="Workspace preferences and gateway connection details. Settings are local to this browser unless noted.">
-        Settings
+      <SectionTitle hint="Platform appearance, operator access and live runtime governance. Browser preferences are local unless noted.">
+        System Settings
       </SectionTitle>
 
       <section className="settings-section">
         <div className="settings-section-head">
-          <h2>Appearance</h2>
-          <p>Use the neutral light theme by default. Dark mode uses charcoal surfaces, not neon.</p>
-        </div>
-        <div className="settings-row">
-          <div className="settings-copy">
-            <strong>Theme</strong>
-            <span>Applies immediately and is stored in this browser.</span>
-          </div>
-          <div className="segmented" role="group" aria-label="Theme">
-            <button
-              className={theme === "light" ? "active" : ""}
-              aria-pressed={theme === "light"}
-              onClick={() => onThemeChange("light")}
-            >
-              <Icon name="sun" size={14} /> Light
-            </button>
-            <button
-              className={theme === "dark" ? "active" : ""}
-              aria-pressed={theme === "dark"}
-              onClick={() => onThemeChange("dark")}
-            >
-              <Icon name="moon" size={14} /> Dark
-            </button>
-          </div>
+          <h2>Workspace</h2>
+          <p>The midnight control-plane theme is fixed for the admin workspace.</p>
         </div>
         <div className="settings-row">
           <div className="settings-copy">
@@ -118,8 +91,8 @@ export function Settings({
             <span className="shortcut-keys"><kbd>Ctrl</kbd><kbd>K</kbd></span>
           </button>
           <div className="settings-row shortcut-row">
-            <span className="settings-copy"><strong>Navigate sections</strong><span>Overview, test runs, findings, evidence, verification, settings</span></span>
-            <span className="shortcut-keys"><kbd>g</kbd><span>then</span><kbd>o</kbd><kbd>t</kbd><kbd>f</kbd><kbd>e</kbd><kbd>v</kbd><kbd>s</kbd></span>
+            <span className="settings-copy"><strong>Navigate sections</strong><span>Overview, users, RBAC, evaluations, topology, logs, evidence, governance, passport, settings</span></span>
+            <span className="shortcut-keys"><kbd>g</kbd><span>then</span><kbd>o</kbd><kbd>u</kbd><kbd>p</kbd><kbd>e</kbd><kbd>t</kbd><kbd>l</kbd><kbd>v</kbd><kbd>g</kbd><kbd>r</kbd><kbd>s</kbd></span>
           </div>
           <div className="settings-row shortcut-row">
             <span className="settings-copy"><strong>Close overlays</strong><span>Command palette and dialogs</span></span>
@@ -134,12 +107,12 @@ export function Settings({
           <p>Read-only values from the gateway health probe. Unavailable services are not inferred to be healthy.</p>
         </div>
         <div className="settings-grid">
-          <div><span>Environment</span><strong>{health.data?.environment ?? "unknown"}</strong></div>
-          <div><span>Mode</span><strong>{health.data?.mode ?? "unknown"}</strong></div>
-          <div><span>Runtime</span><strong>{health.data?.runtime ?? "unknown"}</strong></div>
-          <div><span>Model adapter</span><strong>{services.model?.adapter ?? "unknown"}</strong></div>
-          <div><span>Policy</span><strong>{health.data?.policy?.version ?? "unknown"}</strong></div>
-          <div><span>Gateway image</span><strong className="mono">{health.data?.gateway_image ?? "unknown"}</strong></div>
+          <div><span>Environment</span><strong>{healthLoading ? "checking" : health.data?.environment ?? "unknown"}</strong></div>
+          <div><span>Mode</span><strong>{healthLoading ? "checking" : health.data?.mode ?? "unknown"}</strong></div>
+          <div><span>Runtime</span><strong>{healthLoading ? "checking" : health.data?.runtime ?? "unknown"}</strong></div>
+          <div><span>Model adapter</span><strong>{healthLoading ? "checking" : services.model?.adapter ?? "unknown"}</strong></div>
+          <div><span>Policy</span><strong>{healthLoading ? "checking" : health.data?.policy?.version ?? "unknown"}</strong></div>
+          <div><span>Gateway image</span><strong className="mono">{healthLoading ? "checking" : health.data?.gateway_image ?? "unknown"}</strong></div>
         </div>
         {health.data?.environment && health.data.environment !== "production" && (
           <div className="settings-note">
@@ -149,13 +122,15 @@ export function Settings({
         )}
         <div className="settings-service-row">
           <StatusPill
-            status={health.error ? "disconnected" : unavailable.length === 0 ? "pass" : "warn"}
+            status={health.error ? "disconnected" : healthLoading ? "checking" : unavailable.length === 0 ? "pass" : "warn"}
             label={
               health.error
                 ? "GATEWAY DISCONNECTED"
-                : unavailable.length === 0
-                  ? "ALL SERVICES CONNECTED"
-                  : `${unavailable.length} SERVICE(S) UNAVAILABLE`
+                : healthLoading
+                  ? "CHECKING SERVICES"
+                  : unavailable.length === 0
+                    ? "ALL SERVICES CONNECTED"
+                    : `${unavailable.length} SERVICE(S) UNAVAILABLE`
             }
           />
           <button className="btn btn-ghost btn-xs" onClick={() => void health.refresh()}>

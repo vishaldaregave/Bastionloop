@@ -134,8 +134,8 @@ export function RedLab({ navigate }: { navigate: (route: string) => void }) {
   return (
     <div className="page">
       <div className="page-heading">
-        <SectionTitle hint="Red runs only through the gateway. Every execution is recorded before its findings are signed.">
-          Test Runs
+        <SectionTitle hint="Create, execute and inspect adversarial evaluations. Every execution is recorded before its findings are signed.">
+          Evaluations
         </SectionTitle>
         <div className="page-actions">
           <button className="btn btn-secondary" onClick={() => void runs.refresh()} disabled={runs.loading}>

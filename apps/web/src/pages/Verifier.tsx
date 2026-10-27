@@ -108,7 +108,7 @@ export function Verifier() {
   return (
     <div className="page">
       <SectionTitle hint="This page never calls the Python verifier. It recomputes signatures, the hash chain, checkpoints and the anchor in your browser.">
-        Verification
+        Browser Verifier
       </SectionTitle>
 
       <div className="verify-layout">
