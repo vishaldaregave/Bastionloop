@@ -75,7 +75,7 @@ def _wait_health(url: str, name: str, attempts: int = 120) -> bool:
     return False
 
 
-def start_services(clean: bool = False, include_web: bool = True) -> list[subprocess.Popen[bytes]]:
+def start_services(clean: bool = False, include_web: bool = True, detached: bool = False) -> list[subprocess.Popen[bytes]]:
     env = _env()
     data_dir = Path(env.get("BASTION_DATA_DIR", ROOT / "var"))
     logs = data_dir / "logs"
@@ -83,6 +83,11 @@ def start_services(clean: bool = False, include_web: bool = True) -> list[subpro
         shutil.rmtree(data_dir, ignore_errors=True)
     logs.mkdir(parents=True, exist_ok=True)
     processes: list[subprocess.Popen[bytes]] = []
+    
+    creationflags = 0
+    if detached and sys.platform == "win32":
+        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+
     print("[dev] starting BastionLoop services")
     for name, module, port in SERVICES:
         log_path = logs / f"{name}.log"
@@ -93,7 +98,9 @@ def start_services(clean: bool = False, include_web: bool = True) -> list[subpro
             env=env,
             stdout=handle,
             stderr=subprocess.STDOUT,
+            creationflags=creationflags,
         )
+        setattr(process, "_name", name)
         processes.append(process)
         if not _wait_health(URLS[name], name):
             _stop(processes)
@@ -111,7 +118,9 @@ def start_services(clean: bool = False, include_web: bool = True) -> list[subpro
                 cwd=str(web_dir),
                 stdout=handle,
                 stderr=subprocess.STDOUT,
+                creationflags=creationflags,
             )
+            setattr(web_proc, "_name", "web")
             processes.append(web_proc)
             print("  web      http://127.0.0.1:5173  (log: var/logs/web.log)")
 
@@ -165,7 +174,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-web", action="store_true", help="skip launching frontend dev server")
     args = parser.parse_args(argv)
 
-    processes = start_services(clean=args.clean, include_web=not args.no_web and not (args.demo or args.once))
+    processes = start_services(
+        clean=args.clean,
+        include_web=not args.no_web and not (args.demo or args.once),
+        detached=args.no_block,
+    )
     code = 0
     keep_running = False
     try:
@@ -175,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             return code
         if args.no_block:
             keep_running = True
-            print("[dev] services left running. Stop them with the PIDs above or kill the python processes.")
+            print("[dev] services left running in background. Stop them with 'python scripts/stop_dev.py'.")
             return code
         print("[dev] ready. Press Ctrl+C to stop.")
         while all(process.poll() is None for process in processes):
